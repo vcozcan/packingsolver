@@ -2,6 +2,8 @@
 
 #include "optimizationtools/utils/utils.hpp"
 
+#include <map>
+
 using namespace packingsolver;
 using namespace packingsolver::rectangleguillotine;
 
@@ -387,6 +389,9 @@ ItemTypeId InstanceBuilder::add_item_type(
     return instance_.item_types_.size() - 1;
 }
 
+// Note: this overload does not propagate set_id / set_size.
+// This is intentional — callers (SVC, CG, InstanceFlipper) are
+// disabled for set instances via the tree-search-only guard.
 void InstanceBuilder::add_item_type(
         const ItemType& item_type,
         Profit profit,
@@ -399,6 +404,12 @@ void InstanceBuilder::add_item_type(
             copies,
             item_type.oriented,
             item_type.stack_id);
+}
+
+void InstanceBuilder::set_last_item_type_set(SetId set_id, ItemPos set_size)
+{
+    instance_.item_types_.back().set_id = set_id;
+    instance_.item_types_.back().set_size = set_size;
 }
 
 Area InstanceBuilder::compute_bin_types_area_max() const
@@ -729,6 +740,8 @@ void InstanceBuilder::read_item_types(
         ItemPos copies = 1;
         bool oriented = false;
         StackId stack_id = -1;
+        SetId set_id = -1;
+        ItemPos set_size = -1;
 
         for (Counter i = 0; i < (Counter)line.size(); ++i) {
             if (labels[i] == "WIDTH") {
@@ -742,7 +755,14 @@ void InstanceBuilder::read_item_types(
             } else if (labels[i] == "ORIENTED") {
                 oriented = (bool)std::stol(line[i]);
             } else if (labels[i] == "STACK_ID") {
-                stack_id = (StackId)std::stol(line[i]);
+                if (!line[i].empty())
+                    stack_id = (StackId)std::stol(line[i]);
+            } else if (labels[i] == "SET_ID") {
+                if (!line[i].empty())
+                    set_id = (SetId)std::stol(line[i]);
+            } else if (labels[i] == "SET_SIZE") {
+                if (!line[i].empty())
+                    set_size = (ItemPos)std::stol(line[i]);
             }
         }
 
@@ -767,6 +787,9 @@ void InstanceBuilder::read_item_types(
                 copies,
                 oriented,
                 stack_id);
+        if (set_id != -1 || set_size != -1) {
+            set_last_item_type_set(set_id, set_size);
+        }
     }
 }
 
@@ -776,6 +799,73 @@ void InstanceBuilder::read_item_types(
 
 Instance InstanceBuilder::build()
 {
+    // --- Sets: validate ---
+    bool has_any_set = false;
+    bool has_any_explicit_stack = false;
+    for (ItemTypeId item_type_id = 0;
+            item_type_id < instance_.number_of_item_types();
+            ++item_type_id) {
+        const ItemType& item_type = instance_.item_type(item_type_id);
+        if (item_type.set_id != -1) has_any_set = true;
+        if (item_type.stack_id != -1) has_any_explicit_stack = true;
+    }
+
+    // Reject orphan SET_SIZE (SET_SIZE without SET_ID) unconditionally.
+    // This runs outside the has_any_set gate so it catches the case
+    // where no item has a valid SET_ID but some have SET_SIZE set.
+    for (ItemTypeId item_type_id = 0;
+            item_type_id < instance_.number_of_item_types();
+            ++item_type_id) {
+        const ItemType& item_type = instance_.item_type(item_type_id);
+        if (item_type.set_id == -1 && item_type.set_size != -1) {
+            throw std::invalid_argument(
+                    "item type " + std::to_string(item_type_id)
+                    + " has SET_SIZE but no SET_ID.");
+        }
+    }
+
+    // Mutual exclusion: SET_ID and STACK_ID cannot coexist in the
+    // same instance.  This is a product-level restriction, not an
+    // inherent technical limitation — the branching logic would work
+    // for mixed modes, but the use case does not require it.
+    if (has_any_set && has_any_explicit_stack) {
+        throw std::invalid_argument(
+                "SET_ID and STACK_ID are mutually exclusive. "
+                "Use one or the other, not both.");
+    }
+
+    if (has_any_set) {
+        for (ItemTypeId item_type_id = 0;
+                item_type_id < instance_.number_of_item_types();
+                ++item_type_id) {
+            const ItemType& item_type
+                    = instance_.item_type(item_type_id);
+            if (item_type.set_id == -1)
+                continue;
+            // Catches SET_ID values like -2, -3 (not just -1).
+            if (item_type.set_id < 0) {
+                throw std::invalid_argument(
+                        "item type " + std::to_string(item_type_id)
+                        + " has negative SET_ID ("
+                        + std::to_string(item_type.set_id) + ").");
+            }
+            if (item_type.set_size <= 0) {
+                throw std::invalid_argument(
+                        "item type " + std::to_string(item_type_id)
+                        + " has SET_ID but missing or invalid SET_SIZE ("
+                        + std::to_string(item_type.set_size) + ").");
+            }
+            if (item_type.copies % item_type.set_size != 0) {
+                throw std::invalid_argument(
+                        "item type " + std::to_string(item_type_id)
+                        + " copies (" + std::to_string(item_type.copies)
+                        + ") not divisible by SET_SIZE ("
+                        + std::to_string(item_type.set_size) + ").");
+            }
+        }
+        instance_.has_sets_ = true;
+    }
+
     // Compute item_type_ids_.
     for (ItemTypeId item_type_id = 0;
             item_type_id < instance_.number_of_item_types();
@@ -802,6 +892,54 @@ Instance InstanceBuilder::build()
         instance_.item_type_ids_.push_back({});
         for (ItemPos c = 0; c < item_type.copies; ++c)
             instance_.item_type_ids_[item_type.stack_id].push_back(item_type_id);
+    }
+
+    // --- Sets: populate per-stack metadata with dense indices ---
+    // item_type.set_id is NOT modified — it keeps the original CSV
+    // value for output traceability.  The dense remapping is stored
+    // only in set_id_per_stack_ and set_stacks_.
+    if (instance_.has_sets_) {
+        instance_.set_id_per_stack_.resize(
+                instance_.number_of_stacks(), -1);
+        instance_.set_size_per_stack_.resize(
+                instance_.number_of_stacks(), -1);
+
+        // Build original-to-dense remapping.
+        std::map<SetId, SetId> remap;
+        SetId next_dense = 0;
+        for (ItemTypeId item_type_id = 0;
+                item_type_id < instance_.number_of_item_types();
+                ++item_type_id) {
+            const ItemType& item_type
+                    = instance_.item_type(item_type_id);
+            if (item_type.set_id == -1)
+                continue;
+            if (remap.find(item_type.set_id) == remap.end())
+                remap[item_type.set_id] = next_dense++;
+        }
+        instance_.number_of_sets_ = next_dense;
+
+        // Populate per-stack metadata using dense indices.
+        for (ItemTypeId item_type_id = 0;
+                item_type_id < instance_.number_of_item_types();
+                ++item_type_id) {
+            const ItemType& item_type
+                    = instance_.item_type(item_type_id);
+            if (item_type.set_id == -1)
+                continue;
+            StackId s = item_type.stack_id;
+            instance_.set_id_per_stack_[s] = remap[item_type.set_id];
+            instance_.set_size_per_stack_[s] = item_type.set_size;
+        }
+
+        instance_.set_stacks_.resize(instance_.number_of_sets_);
+        for (StackId s = 0;
+                s < instance_.number_of_stacks();
+                ++s) {
+            SetId sid = instance_.set_id_per_stack_[s];
+            if (sid != -1)
+                instance_.set_stacks_[sid].push_back(s);
+        }
     }
 
     // Compute item type attributes.

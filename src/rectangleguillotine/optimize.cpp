@@ -591,6 +591,31 @@ packingsolver::rectangleguillotine::Output packingsolver::rectangleguillotine::o
         }
     }
 
+    // Sets are only supported by tree search.  SVC, CG, SSK, and DS
+    // create subinstances via add_item_type(ItemType, profit, copies)
+    // which does not carry set metadata, and the cross-bin active-row
+    // state is lost between subproblems.
+    if (instance.has_sets()) {
+        // Reject explicitly requested incompatible algorithms.
+        if (parameters.use_column_generation_2
+                || parameters.use_sequential_single_knapsack
+                || parameters.use_sequential_value_correction
+                || parameters.use_dichotomic_search
+                || parameters.use_column_generation) {
+            throw std::invalid_argument(
+                    "Set instances only support tree search. "
+                    "Remove explicit algorithm selection flags "
+                    "(column generation, sequential value correction, "
+                    "sequential single knapsack, dichotomic search).");
+        }
+        use_tree_search = true;
+        use_column_generation_2 = false;
+        use_sequential_single_knapsack = false;
+        use_sequential_value_correction = false;
+        use_dichotomic_search = false;
+        use_column_generation = false;
+    }
+
     if (instance.objective() == Objective::BinPacking) {
         if (instance.number_of_bin_types() == 1
                 && instance.number_of_items() <= 100) {
