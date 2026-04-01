@@ -49,6 +49,48 @@ BranchingScheme::BranchingScheme(
             }
         }
     }
+
+    // Fix stack_pred_ for set instances: break links that cross set
+    // boundaries or have mismatched set_size, then relink broken
+    // entries to valid predecessors within the same set.
+    if (instance.has_sets()) {
+        // Pass 1: break incompatible links.
+        for (StackId s = 0;
+                s < (StackId)stack_pred_.size();
+                ++s) {
+            StackId sp = stack_pred_[s];
+            if (sp == -1)
+                continue;
+            SetId sid_s = instance.set_id_of_stack(s);
+            SetId sid_sp = instance.set_id_of_stack(sp);
+            if (sid_s != sid_sp
+                    || instance.set_size_of_stack(s)
+                       != instance.set_size_of_stack(sp)) {
+                stack_pred_[s] = -1;
+            }
+        }
+        // Pass 2: relink broken entries to a valid predecessor.
+        for (StackId s = 0;
+                s < (StackId)stack_pred_.size();
+                ++s) {
+            if (stack_pred_[s] != -1)
+                continue;
+            SetId sid = instance.set_id_of_stack(s);
+            if (sid == -1)
+                continue;
+            for (StackId s0 = s - 1; s0 >= 0; --s0) {
+                if (instance.set_id_of_stack(s0) != sid)
+                    continue;
+                if (instance.set_size_of_stack(s0)
+                        != instance.set_size_of_stack(s))
+                    continue;
+                if (equals(s, s0)) {
+                    stack_pred_[s] = s0;
+                    break;
+                }
+            }
+        }
+    }
 }
 
 bool BranchingScheme::equals(StackId s1, StackId s2)
@@ -548,6 +590,30 @@ std::vector<std::shared_ptr<BranchingScheme::Node>> BranchingScheme::children(
             if (sp != -1 && parent.pos_stack[sp] <= parent.pos_stack[s])
                 continue;
 
+            // Set active-row constraint.
+            // Within a set, at most one row may be mid-sub-group.
+            // If another row in this set is active (copies_placed %
+            // set_size != 0), block this row.
+            if (instance_.has_sets()) {
+                SetId sid = instance_.set_id_of_stack(s);
+                if (sid != -1) {
+                    bool blocked = false;
+                    for (StackId s2 : instance_.set_stacks(sid)) {
+                        if (s2 == s)
+                            continue;
+                        ItemPos placed = parent.pos_stack[s2];
+                        if (placed > 0
+                                && placed < instance.stack_size(s2)
+                                && placed % instance_.set_size_of_stack(s2) != 0) {
+                            blocked = true;
+                            break;
+                        }
+                    }
+                    if (blocked)
+                        continue;
+                }
+            }
+
             ItemTypeId item_type_id = instance.item(s, parent.pos_stack[s]);
             const ItemType& item_type = instance.item_type(item_type_id);
 
@@ -603,6 +669,17 @@ std::vector<std::shared_ptr<BranchingScheme::Node>> BranchingScheme::children(
                                     && parent.pos_stack[sp2]
                                     <= parent.pos_stack[s2]))
                             continue;
+                        // Set constraint for 2-item insertion from
+                        // different rows in the same set.
+                        if (instance_.has_sets()) {
+                            SetId sid1 = instance_.set_id_of_stack(s);
+                            SetId sid2 = instance_.set_id_of_stack(s2);
+                            if (sid1 != -1 && sid2 != -1 && sid1 == sid2) {
+                                ItemPos after = parent.pos_stack[s] + 1;
+                                if (after % instance_.set_size_of_stack(s) != 0)
+                                    continue;
+                            }
+                        }
                         item_type_id_2 = instance.item(s2, parent.pos_stack[s2]);
                     }
 

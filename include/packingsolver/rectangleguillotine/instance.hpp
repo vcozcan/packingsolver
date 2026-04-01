@@ -7,6 +7,8 @@ namespace packingsolver
 namespace rectangleguillotine
 {
 
+using SetId = int32_t;
+
 enum class CutType { Roadef2018, NonExact, Exact, Homogenous };
 enum class CutOrientation { Horizontal, Vertical, Any };
 
@@ -236,6 +238,12 @@ struct ItemType
     /** Indicates if the item is oriented (i.e. cannot be rotated). */
     bool oriented;
 
+    /** Set id to which this item type belongs (-1 if not in a set). */
+    SetId set_id = -1;
+
+    /** Number of copies forming one sub-group within the set. */
+    ItemPos set_size = -1;
+
     /*
      * Computed attributes
      */
@@ -333,6 +341,21 @@ public:
 
     /** Get the item_pos's item of stack s. */
     inline ItemTypeId item(StackId s, ItemPos item_pos) const { return item_type_ids_[s][item_pos]; }
+
+    /** Return true iff any sets are defined. */
+    inline bool has_sets() const { return has_sets_; }
+
+    /** Get the dense set index of stack s (-1 if not in a set). */
+    inline SetId set_id_of_stack(StackId s) const { return set_id_per_stack_[s]; }
+
+    /** Get the set_size of stack s (-1 if not in a set). */
+    inline ItemPos set_size_of_stack(StackId s) const { return set_size_per_stack_[s]; }
+
+    /** Get the number of sets (dense count). */
+    inline SetId number_of_sets() const { return number_of_sets_; }
+
+    /** Get the list of stack_ids belonging to dense set sid. */
+    inline const std::vector<StackId>& set_stacks(SetId sid) const { return set_stacks_[sid]; }
 
     /** Get the total area of the items. */
     inline Area item_area() const { return item_area_; }
@@ -487,6 +510,25 @@ private:
 
     /** Convert item position to item type. */
     std::vector<std::vector<ItemTypeId>> item_type_ids_;
+
+    /** Whether any sets are defined in this instance. */
+    bool has_sets_ = false;
+
+    /**
+     * For each stack, its dense set index (-1 if not in a set).
+     * Dense index is an internal remapping; the original SET_ID from
+     * CSV is preserved on ItemType::set_id for output traceability.
+     */
+    std::vector<SetId> set_id_per_stack_;
+
+    /** For each stack, its set_size (-1 if not in a set). */
+    std::vector<ItemPos> set_size_per_stack_;
+
+    /** For each dense set index, the list of stack_ids belonging to it. */
+    std::vector<std::vector<StackId>> set_stacks_;
+
+    /** Number of sets (dense count). */
+    SetId number_of_sets_ = 0;
 
     /** Total item area. */
     Area item_area_ = 0;

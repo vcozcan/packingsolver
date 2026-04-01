@@ -157,6 +157,8 @@ std::ostream& packingsolver::rectangleguillotine::operator<<(
         << " copies " << item_type.copies
         << " stack_id " << item_type.stack_id
         << " oriented " << item_type.oriented
+        << " set_id " << item_type.set_id
+        << " set_size " << item_type.set_size
         ;
     return os;
 }
@@ -198,14 +200,13 @@ void Instance::write(
                 FUNC_SIGNATURE + ": "
                 "unable to open file \"" + items_path + "\".");
     }
-    f_items <<
-        "ID,"
-        "WIDTH,"
-        "HEIGHT,"
-        "PROFIT,"
-        "COPIES,"
-        "ORIENTED,"
-        "STACK_ID" << std::endl;
+    if (has_sets_) {
+        f_items << "ID,WIDTH,HEIGHT,PROFIT,COPIES,ORIENTED,"
+                   "SET_ID,SET_SIZE" << std::endl;
+    } else {
+        f_items << "ID,WIDTH,HEIGHT,PROFIT,COPIES,ORIENTED,"
+                   "STACK_ID" << std::endl;
+    }
     for (ItemTypeId item_type_id = 0;
             item_type_id < number_of_item_types();
             ++item_type_id) {
@@ -216,8 +217,15 @@ void Instance::write(
             << item_type.rect.h << ","
             << item_type.profit << ","
             << item_type.copies << ","
-            << item_type.oriented << ","
-            << item_type.stack_id << std::endl;
+            << item_type.oriented << ",";
+        if (has_sets_) {
+            f_items
+                << item_type.set_id << ","
+                << item_type.set_size << std::endl;
+        } else {
+            f_items
+                << item_type.stack_id << std::endl;
+        }
     }
 
     // Export bins.
@@ -326,6 +334,7 @@ std::ostream& Instance::format(
             << "Number of bin types:                   " << number_of_bin_types() << std::endl
             << "Number of bins:                        " << number_of_bins() << std::endl
             << "Number of stacks:                      " << number_of_stacks() << std::endl
+            << "Number of sets:                        " << number_of_sets() << std::endl
             << "Number of defects:                     " << number_of_defects() << std::endl
             << "Number of stages:                      " << parameters().number_of_stages << std::endl
             << "Cut type:                              " << parameters().cut_type << std::endl
@@ -454,6 +463,8 @@ std::ostream& Instance::format(
             << std::setw(12) << "Copies"
             << std::setw(12) << "Oriented"
             << std::setw(12) << "Stack id"
+            << std::setw(12) << "Set id"
+            << std::setw(12) << "Set size"
             << std::endl
             << std::setw(12) << "---------"
             << std::setw(12) << "-----"
@@ -462,6 +473,8 @@ std::ostream& Instance::format(
             << std::setw(12) << "------"
             << std::setw(12) << "--------"
             << std::setw(12) << "-----"
+            << std::setw(12) << "------"
+            << std::setw(12) << "--------"
             << std::endl;
         for (ItemTypeId item_type_id = 0;
                 item_type_id < number_of_item_types();
@@ -475,6 +488,8 @@ std::ostream& Instance::format(
                 << std::setw(12) << item_type.copies
                 << std::setw(12) << item_type.oriented
                 << std::setw(12) << item_type.stack_id
+                << std::setw(12) << item_type.set_id
+                << std::setw(12) << item_type.set_size
                 << std::endl;
         }
     }
