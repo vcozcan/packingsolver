@@ -33,6 +33,7 @@ Features:
 * Item types:
   * With or without rotations
   * Stacks (precedence constraints on the order in which items are extracted)
+  * Sets (relaxed stacks: items within a set are grouped in sub-groups of `SET_SIZE`; only one row may be mid-sub-group at a time; `SET_ID` and `STACK_ID` are mutually exclusive)
 * Bins types:
   * May contain defects
   * Allow or forbid cutting through a defect

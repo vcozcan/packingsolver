@@ -594,6 +594,8 @@ std::vector<std::shared_ptr<BranchingScheme::Node>> BranchingScheme::children(
             // Within a set, at most one row may be mid-sub-group.
             // If another row in this set is active (copies_placed %
             // set_size != 0), block this row.
+            // Uses instance_ (original) throughout — stack indices,
+            // sizes, and set metadata are invariant under flipping.
             if (instance_.has_sets()) {
                 SetId sid = instance_.set_id_of_stack(s);
                 if (sid != -1) {
@@ -603,7 +605,7 @@ std::vector<std::shared_ptr<BranchingScheme::Node>> BranchingScheme::children(
                             continue;
                         ItemPos placed = parent.pos_stack[s2];
                         if (placed > 0
-                                && placed < instance.stack_size(s2)
+                                && placed < instance_.stack_size(s2)
                                 && placed % instance_.set_size_of_stack(s2) != 0) {
                             blocked = true;
                             break;
@@ -640,7 +642,9 @@ std::vector<std::shared_ptr<BranchingScheme::Node>> BranchingScheme::children(
                         df);
             }
 
-            // Try adding it with a second item
+            // Try adding it with a second item.
+            // Only Roadef2018 has a 2-item insertion path; other cut
+            // types are implicitly safe for sets here.
             if (instance.parameters().cut_type == CutType::Roadef2018) {
                 Length wj = item_type.rect.w;
                 Length wjr = item_type.rect.h;

@@ -389,6 +389,9 @@ ItemTypeId InstanceBuilder::add_item_type(
     return instance_.item_types_.size() - 1;
 }
 
+// Note: this overload does not propagate set_id / set_size.
+// This is intentional — callers (SVC, CG, InstanceFlipper) are
+// disabled for set instances via the tree-search-only guard.
 void InstanceBuilder::add_item_type(
         const ItemType& item_type,
         Profit profit,
@@ -784,7 +787,7 @@ void InstanceBuilder::read_item_types(
                 copies,
                 oriented,
                 stack_id);
-        if (set_id != -1) {
+        if (set_id != -1 || set_size != -1) {
             set_last_item_type_set(set_id, set_size);
         }
     }
@@ -807,6 +810,20 @@ Instance InstanceBuilder::build()
         if (item_type.stack_id != -1) has_any_explicit_stack = true;
     }
 
+    // Reject orphan SET_SIZE (SET_SIZE without SET_ID) unconditionally.
+    // This runs outside the has_any_set gate so it catches the case
+    // where no item has a valid SET_ID but some have SET_SIZE set.
+    for (ItemTypeId item_type_id = 0;
+            item_type_id < instance_.number_of_item_types();
+            ++item_type_id) {
+        const ItemType& item_type = instance_.item_type(item_type_id);
+        if (item_type.set_id == -1 && item_type.set_size != -1) {
+            throw std::invalid_argument(
+                    "item type " + std::to_string(item_type_id)
+                    + " has SET_SIZE but no SET_ID.");
+        }
+    }
+
     // Mutual exclusion: SET_ID and STACK_ID cannot coexist in the
     // same instance.  This is a product-level restriction, not an
     // inherent technical limitation — the branching logic would work
@@ -823,15 +840,9 @@ Instance InstanceBuilder::build()
                 ++item_type_id) {
             const ItemType& item_type
                     = instance_.item_type(item_type_id);
-            if (item_type.set_id == -1) {
-                // Reject SET_SIZE without SET_ID.
-                if (item_type.set_size > 0) {
-                    throw std::invalid_argument(
-                            "item type " + std::to_string(item_type_id)
-                            + " has SET_SIZE but no SET_ID.");
-                }
+            if (item_type.set_id == -1)
                 continue;
-            }
+            // Catches SET_ID values like -2, -3 (not just -1).
             if (item_type.set_id < 0) {
                 throw std::invalid_argument(
                         "item type " + std::to_string(item_type_id)

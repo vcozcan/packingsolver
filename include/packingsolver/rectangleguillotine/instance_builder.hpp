@@ -162,7 +162,8 @@ public:
             Profit profit,
             ItemPos copies);
 
-    /** Set the set_id and set_size for the most recently added item type. */
+    /** Set the set_id and set_size for the most recently added item type.
+     *  Must be called immediately after add_item_type(). */
     void set_last_item_type_set(SetId set_id, ItemPos set_size);
 
     /**

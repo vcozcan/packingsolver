@@ -348,7 +348,8 @@ public:
     /** Get the dense set index of stack s (-1 if not in a set). */
     inline SetId set_id_of_stack(StackId s) const { return set_id_per_stack_[s]; }
 
-    /** Get the set_size of stack s (-1 if not in a set). */
+    /** Get the set_size of stack s (-1 if not in a set).
+     *  Callers must check set_id_of_stack(s) != -1 first. */
     inline ItemPos set_size_of_stack(StackId s) const { return set_size_per_stack_[s]; }
 
     /** Get the number of sets (dense count). */

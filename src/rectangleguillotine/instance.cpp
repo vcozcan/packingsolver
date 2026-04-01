@@ -462,9 +462,13 @@ std::ostream& Instance::format(
             << std::setw(12) << "Profit"
             << std::setw(12) << "Copies"
             << std::setw(12) << "Oriented"
-            << std::setw(12) << "Stack id"
-            << std::setw(12) << "Set id"
-            << std::setw(12) << "Set size"
+            << std::setw(12) << "Stack id";
+        if (has_sets_) {
+            os
+                << std::setw(12) << "Set id"
+                << std::setw(12) << "Set size";
+        }
+        os
             << std::endl
             << std::setw(12) << "---------"
             << std::setw(12) << "-----"
@@ -472,9 +476,13 @@ std::ostream& Instance::format(
             << std::setw(12) << "------"
             << std::setw(12) << "------"
             << std::setw(12) << "--------"
-            << std::setw(12) << "-----"
-            << std::setw(12) << "------"
-            << std::setw(12) << "--------"
+            << std::setw(12) << "-----";
+        if (has_sets_) {
+            os
+                << std::setw(12) << "------"
+                << std::setw(12) << "--------";
+        }
+        os
             << std::endl;
         for (ItemTypeId item_type_id = 0;
                 item_type_id < number_of_item_types();
@@ -487,9 +495,13 @@ std::ostream& Instance::format(
                 << std::setw(12) << item_type.profit
                 << std::setw(12) << item_type.copies
                 << std::setw(12) << item_type.oriented
-                << std::setw(12) << item_type.stack_id
-                << std::setw(12) << item_type.set_id
-                << std::setw(12) << item_type.set_size
+                << std::setw(12) << item_type.stack_id;
+            if (has_sets_) {
+                os
+                    << std::setw(12) << item_type.set_id
+                    << std::setw(12) << item_type.set_size;
+            }
+            os
                 << std::endl;
         }
     }

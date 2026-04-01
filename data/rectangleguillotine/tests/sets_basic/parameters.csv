@@ -1,0 +1,5 @@
+NAME,VALUE
+objective,bin-packing-with-leftovers
+number_of_stages,3
+cut_type,non-exact
+first_stage_orientation,any
