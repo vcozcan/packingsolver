@@ -36,20 +36,17 @@ This defines:
 
 ### Mutual exclusion with STACK_ID
 
-`SET_ID` and `STACK_ID` **cannot coexist** in the same instance. If any item
-has a `SET_ID`, no item may have a `STACK_ID`, and vice versa. This is enforced
-at build time with an `std::invalid_argument` exception.
-
-This is a product-level restriction (not a technical limitation) — the
-branching logic could handle mixed modes, but the use case does not require it.
+`SET_ID` and `STACK_ID` **cannot coexist on the same item**. Within the same
+instance, different items may freely use different features — some items can
+have `SET_ID`, others can have `STACK_ID`, and others can have neither.
+This per-item constraint is enforced at build time with an
+`std::invalid_argument` exception.
 
 ### Output schema
 
-When `write()` exports a set-enabled instance, the CSV header uses
-`SET_ID,SET_SIZE` instead of `STACK_ID`. Non-set items in a set instance get
-`-1,-1` for the set columns. The `STACK_ID` column is omitted entirely because
-stack assignments are auto-computed by `build()` and carry no user-provided
-semantic identity.
+When `write()` exports a set-enabled instance, the CSV header includes
+`STACK_ID,SET_ID,SET_SIZE`. All items get their `stack_id` (explicit or
+auto-assigned by `build()`). Non-set items get `-1,-1` for the set columns.
 
 Round-trip safety: re-reading a `write()` output produces a behaviorally
 identical instance. Stack indices are deterministically reassigned in item-type
@@ -174,7 +171,7 @@ All validation runs in `InstanceBuilder::build()`. Invalid input throws
 
 | Rule | Error message |
 |------|---------------|
-| `SET_ID` and `STACK_ID` both present | "SET_ID and STACK_ID are mutually exclusive" |
+| Same item has both `SET_ID` and `STACK_ID` | "item type N has both SET_ID and explicit STACK_ID" |
 | `SET_SIZE` without `SET_ID` (orphan) | "item type N has SET_SIZE but no SET_ID" |
 | `SET_ID` < 0 (other than -1) | "item type N has negative SET_ID (X)" |
 | `SET_ID` present but `SET_SIZE` <= 0 | "item type N has SET_ID but missing or invalid SET_SIZE" |
@@ -185,38 +182,35 @@ to catch cases where no item has a valid SET_ID but some have SET_SIZE set.
 
 ## Known Limitations
 
-1. **No mixed SET_ID + STACK_ID:** Cannot combine sets with explicit stacks in
-   the same instance. This is a design choice, not a technical limitation.
-
-2. **Tree search only:** Subproblem-based algorithms (SVC, CG, SSK, DS) are
+1. **Tree search only:** Subproblem-based algorithms (SVC, CG, SSK, DS) are
    incompatible. This limits optimization power for large instances where these
    algorithms would otherwise outperform tree search.
 
-3. **Single-bin limitation with high copy counts:** When using
+2. **Single-bin limitation with high copy counts:** When using
    `BinPackingWithLeftovers` objective with a single bin and very high copy
    counts (e.g., 120 copies), the `NotAnytimeSequential` mode may fail to
    place any items. Use `Anytime` mode or multiple bins for such cases.
 
-4. **`add_item_type(const ItemType&, profit, copies)` drops set metadata:**
+3. **`add_item_type(const ItemType&, profit, copies)` drops set metadata:**
    This overload (used by internal algorithms) does not propagate `set_id` or
    `set_size`. This is intentional and guarded by the tree-search-only
    restriction, but future algorithm development must be aware of this.
 
-5. **`set_last_item_type_set()` coupling:** Must be called immediately after
+4. **`set_last_item_type_set()` coupling:** Must be called immediately after
    `add_item_type()`. There is no validation at the call site — all validation
    is deferred to `build()`.
 
-6. **`set_size_of_stack()` accessor:** Returns -1 for non-set stacks. Callers
+5. **`set_size_of_stack()` accessor:** Returns -1 for non-set stacks. Callers
    must check `set_id_of_stack(s) != -1` before using the return value.
 
 ## Test Coverage
 
-22 automated tests in `test/rectangleguillotine/sets_test.cpp`:
+23 automated tests in `test/rectangleguillotine/sets_test.cpp`:
 
-- **Instance building (5):** basic set, mixed set/non-set, multiple sets,
-  sparse SET_IDs, non-set regression
-- **Validation (7):** mutual exclusion, copies divisibility, SET_SIZE without
-  SET_ID, orphan SET_SIZE, negative SET_ID, missing SET_SIZE, SET_SIZE=0
+- **Instance building (6):** basic set, mixed set/non-set, multiple sets,
+  sparse SET_IDs, non-set regression, mixed set + explicit stack
+- **Validation (7):** per-item mutual exclusion, copies divisibility, SET_SIZE
+  without SET_ID, orphan SET_SIZE, negative SET_ID, missing SET_SIZE, SET_SIZE=0
 - **CSV parsing (3):** basic, mixed, multiple sets
 - **Branching scheme (2):** cross-set stack_pred_ breaking, different-SET_SIZE
   stack_pred_ breaking

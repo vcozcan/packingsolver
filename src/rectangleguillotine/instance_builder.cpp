@@ -801,13 +801,18 @@ Instance InstanceBuilder::build()
 {
     // --- Sets: validate ---
     bool has_any_set = false;
-    bool has_any_explicit_stack = false;
     for (ItemTypeId item_type_id = 0;
             item_type_id < instance_.number_of_item_types();
             ++item_type_id) {
         const ItemType& item_type = instance_.item_type(item_type_id);
         if (item_type.set_id != -1) has_any_set = true;
-        if (item_type.stack_id != -1) has_any_explicit_stack = true;
+        // V10: per-item mutual exclusion (defense-in-depth).
+        if (item_type.set_id >= 0 && item_type.stack_id >= 0) {
+            throw std::invalid_argument(
+                    "item type " + std::to_string(item_type_id)
+                    + " has both SET_ID and explicit STACK_ID."
+                    " They are mutually exclusive on the same item.");
+        }
     }
 
     // Reject orphan SET_SIZE (SET_SIZE without SET_ID) unconditionally.
@@ -822,16 +827,6 @@ Instance InstanceBuilder::build()
                     "item type " + std::to_string(item_type_id)
                     + " has SET_SIZE but no SET_ID.");
         }
-    }
-
-    // Mutual exclusion: SET_ID and STACK_ID cannot coexist in the
-    // same instance.  This is a product-level restriction, not an
-    // inherent technical limitation — the branching logic would work
-    // for mixed modes, but the use case does not require it.
-    if (has_any_set && has_any_explicit_stack) {
-        throw std::invalid_argument(
-                "SET_ID and STACK_ID are mutually exclusive. "
-                "Use one or the other, not both.");
     }
 
     if (has_any_set) {

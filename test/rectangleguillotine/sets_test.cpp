@@ -125,8 +125,23 @@ TEST(RectangleGuillotineSets, NonSetInstanceHasSetsIsFalse)
 /////////////////////////////// Validation tests ///////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////
 
-TEST(RectangleGuillotineSets, MutualExclusionSetAndStack)
+TEST(RectangleGuillotineSets, MutualExclusionSetAndStackSameItem)
 {
+    // Same item has both explicit stack_id and set_id — rejected.
+    InstanceBuilder instance_builder;
+    instance_builder.set_objective(Objective::BinPackingWithLeftovers);
+    instance_builder.set_number_of_stages(3);
+    instance_builder.set_cut_type(CutType::NonExact);
+    instance_builder.add_item_type(1000, 500, -1, 4, false, 0);  // explicit stack_id=0
+    instance_builder.set_last_item_type_set(0, 2);                // also set on same item
+    instance_builder.add_bin_type(6000, 3210);
+
+    EXPECT_THROW(instance_builder.build(), std::invalid_argument);
+}
+
+TEST(RectangleGuillotineSets, MixedSetAndExplicitStackBuilds)
+{
+    // One item with explicit stack_id, another with set_id — allowed.
     InstanceBuilder instance_builder;
     instance_builder.set_objective(Objective::BinPackingWithLeftovers);
     instance_builder.set_number_of_stages(3);
@@ -135,8 +150,14 @@ TEST(RectangleGuillotineSets, MutualExclusionSetAndStack)
     instance_builder.add_item_type(600, 400, -1, 4);
     instance_builder.set_last_item_type_set(0, 2);
     instance_builder.add_bin_type(6000, 3210);
+    Instance instance = instance_builder.build();
 
-    EXPECT_THROW(instance_builder.build(), std::invalid_argument);
+    EXPECT_TRUE(instance.has_sets());
+    EXPECT_EQ(instance.number_of_sets(), 1);
+    // Stack item: stack_id=0, no set
+    EXPECT_EQ(instance.item_type(0).set_id, -1);
+    // Set item: auto-assigned stack, set_id=0
+    EXPECT_EQ(instance.item_type(1).set_id, 0);
 }
 
 TEST(RectangleGuillotineSets, CopiesNotDivisibleBySetSize)

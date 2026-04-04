@@ -202,7 +202,7 @@ void Instance::write(
     }
     if (has_sets_) {
         f_items << "ID,WIDTH,HEIGHT,PROFIT,COPIES,ORIENTED,"
-                   "SET_ID,SET_SIZE" << std::endl;
+                   "STACK_ID,SET_ID,SET_SIZE" << std::endl;
     } else {
         f_items << "ID,WIDTH,HEIGHT,PROFIT,COPIES,ORIENTED,"
                    "STACK_ID" << std::endl;
@@ -220,6 +220,7 @@ void Instance::write(
             << item_type.oriented << ",";
         if (has_sets_) {
             f_items
+                << item_type.stack_id << ","
                 << item_type.set_id << ","
                 << item_type.set_size << std::endl;
         } else {
