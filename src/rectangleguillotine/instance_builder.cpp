@@ -245,7 +245,7 @@ void InstanceBuilder::set_bin_minimum_waste_length(
         BinTypeId bin_type_id,
         Length value)
 {
-    if (bin_type_id < 0 || bin_type_id >= (BinTypeId)instance_.bin_types_.size()) {
+    if (bin_type_id < 0 || bin_type_id >= instance_.bin_types_.size()) {
         throw std::invalid_argument(
                 FUNC_SIGNATURE + ": "
                 "invalid 'bin_type_id'; "
@@ -265,7 +265,7 @@ void InstanceBuilder::set_bin_minimum_distance_1_cuts(
         BinTypeId bin_type_id,
         Length value)
 {
-    if (bin_type_id < 0 || bin_type_id >= (BinTypeId)instance_.bin_types_.size()) {
+    if (bin_type_id < 0 || bin_type_id >= instance_.bin_types_.size()) {
         throw std::invalid_argument(
                 FUNC_SIGNATURE + ": "
                 "invalid 'bin_type_id'; "
@@ -285,7 +285,7 @@ void InstanceBuilder::set_bin_minimum_distance_2_cuts(
         BinTypeId bin_type_id,
         Length value)
 {
-    if (bin_type_id < 0 || bin_type_id >= (BinTypeId)instance_.bin_types_.size()) {
+    if (bin_type_id < 0 || bin_type_id >= instance_.bin_types_.size()) {
         throw std::invalid_argument(
                 FUNC_SIGNATURE + ": "
                 "invalid 'bin_type_id'; "
@@ -683,11 +683,14 @@ void InstanceBuilder::read_bin_types(
                 std::stringstream ss(line[i]);
                 ss >> right_trim_type;
             } else if (labels[i] == "MIN_WASTE_LENGTH") {
-                min_waste = (Length)std::stol(line[i]);
+                if (!line[i].empty())
+                    min_waste = (Length)std::stoll(line[i]);
             } else if (labels[i] == "MIN_DISTANCE_1_CUTS") {
-                min_dist_1 = (Length)std::stol(line[i]);
+                if (!line[i].empty())
+                    min_dist_1 = (Length)std::stoll(line[i]);
             } else if (labels[i] == "MIN_DISTANCE_2_CUTS") {
-                min_dist_2 = (Length)std::stol(line[i]);
+                if (!line[i].empty())
+                    min_dist_2 = (Length)std::stoll(line[i]);
             }
         }
 

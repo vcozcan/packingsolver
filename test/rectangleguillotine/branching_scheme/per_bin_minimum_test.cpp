@@ -27,24 +27,6 @@
 using namespace packingsolver;
 using namespace packingsolver::rectangleguillotine;
 
-namespace
-{
-
-/** Build a minimal one-bin, one-item instance for setter/effective_* tests. */
-Instance make_minimal_instance(
-        Length bin_w = 6000,
-        Length bin_h = 3210)
-{
-    InstanceBuilder b;
-    b.set_objective(Objective::BinPackingWithLeftovers);
-    b.set_roadef2018();
-    b.add_item_type(500, 500, -1, 1, false, 0);
-    b.add_bin_type(bin_w, bin_h);
-    return b.build();
-}
-
-}  // namespace
-
 // ---------------------------------------------------------------------------
 // 1. Setter wires through to the BinType field and effective_* resolves it.
 // ---------------------------------------------------------------------------
@@ -359,48 +341,71 @@ TEST(RectangleGuillotineBranchingScheme, PerBinWithCopiesMinCopyOverload)
 // the produced insertions in `update`, exactly the same way the global value
 // would.
 //
-// Two bin types: bin 0 has per-bin mwl = 0 (no enforcement), bin 1 has
-// per-bin mwl = 100 (forces residual padding). For an item placed first in
-// bin 1, an off-by-100 padding must surface as a difference in node.waste
-// relative to the same insertion attempted in bin 0.
+// Two scenarios, both with the global default mwl = 0:
+//   A. Bin has no per-bin override (effective mwl = 0). Mirrors CutThickness2:
+//      the partial-cut variant of item 1 (5990 wide, leaving a 10-unit
+//      residual) IS produced.
+//   B. Bin has per-bin override mwl = 10 (effective mwl = 10). Mirrors
+//      CutThickness3: the partial-cut variant is forbidden; no further
+//      insertion is produced from `node_1`.
 //
-// This mirrors the CutThickness3 test pattern (which uses the global
-// minimum_waste_length) but exercises per-bin resolution.
+// Everything else — items, bin size, cut_thickness, global parameters — is
+// identical between A and B. The differential proves that flipping ONLY the
+// per-bin field changes branching the same way changing the global would.
 // ---------------------------------------------------------------------------
 TEST(RectangleGuillotineBranchingScheme, PerBinMwlAffectsBranchingResidualPadding)
 {
-    // Establish: global mwl = 0 — only bin 1 carries an override.
-    InstanceBuilder builder;
-    builder.set_objective(Objective::BinPackingWithLeftovers);
-    builder.set_roadef2018();
-    builder.set_cut_thickness(20);
-    builder.set_minimum_waste_length(0);  // explicit global = 0
-    builder.add_item_type(3000, 500, -1, 1, false, 0);
-    builder.add_item_type(2970, 3210, -1, 1, false, 0);
-    BinTypeId bin_with_override = builder.add_bin_type(6000, 3210);
-    builder.set_bin_minimum_waste_length(bin_with_override, 10);
-    Instance instance = builder.build();
+    // ----- Scenario A: no per-bin override; effective mwl = 0. -----
+    InstanceBuilder builder_a;
+    builder_a.set_objective(Objective::BinPackingWithLeftovers);
+    builder_a.set_cut_thickness(20);
+    builder_a.add_item_type(3000, 500, -1, 1, false, 0);
+    builder_a.add_item_type(2970, 3210, -1, 1, false, 0);
+    builder_a.add_bin_type(6000, 3210);
+    Instance instance_a = builder_a.build();
 
-    // With mwl=10 carried per-bin, the "partial cutting" optimisation in
-    // CutThickness2 is disallowed for this bin — only the full-width
-    // insertion below should be produced. This mirrors CutThickness3's
-    // assertion but proves the constraint came from the per-bin field.
-    BranchingScheme branching_scheme(instance);
-    auto root = branching_scheme.root();
+    BranchingScheme bs_a(instance_a);
+    auto root_a = bs_a.root();
 
-    BranchingScheme::Insertion i0 = {0, -1, -1, 3000, 500, 3000, 6000, 3210, 1, 1};
-    std::vector<BranchingScheme::Insertion> is0 =
-            branching_scheme.insertions(branching_scheme.children(root));
-    EXPECT_NE(std::find(is0.begin(), is0.end(), i0), is0.end());
-    auto node_1 = branching_scheme.child(root, i0);
+    BranchingScheme::Insertion i0_a
+            = {0, -1, -1, 3000, 500, 3000, 6000, 3210, 1, 1};
+    std::vector<BranchingScheme::Insertion> is0_a =
+            bs_a.insertions(bs_a.children(root_a));
+    EXPECT_NE(std::find(is0_a.begin(), is0_a.end(), i0_a), is0_a.end());
+    auto node_a = bs_a.child(root_a, i0_a);
 
-    // Only the full-width insertion of item 1 should be produced; the
-    // partial-cut variant (5990 wide) is forbidden by the per-bin mwl=10.
-    std::vector<BranchingScheme::Insertion> is1 =
-            branching_scheme.insertions(branching_scheme.children(node_1));
-    BranchingScheme::Insertion full_width
-            = {1, -1, 0, 5990, 3210, 5990, 6000, 3210, 1, 1};
-    EXPECT_EQ(
-            std::find(is1.begin(), is1.end(), full_width),
-            is1.end());
+    // Partial-cut variant (5990 wide) is the only allowed follow-up — same
+    // as CutThickness2.
+    std::vector<BranchingScheme::Insertion> is_a {
+        {1, -1, 0, 5990, 3210, 5990, 6000, 3210, 1, 1},
+    };
+    EXPECT_EQ(bs_a.insertions(bs_a.children(node_a)), is_a);
+
+    // ----- Scenario B: identical setup, plus per-bin override mwl = 10. -----
+    InstanceBuilder builder_b;
+    builder_b.set_objective(Objective::BinPackingWithLeftovers);
+    builder_b.set_cut_thickness(20);
+    builder_b.add_item_type(3000, 500, -1, 1, false, 0);
+    builder_b.add_item_type(2970, 3210, -1, 1, false, 0);
+    BinTypeId bin_b = builder_b.add_bin_type(6000, 3210);
+    builder_b.set_bin_minimum_waste_length(bin_b, 10);
+    Instance instance_b = builder_b.build();
+
+    BranchingScheme bs_b(instance_b);
+    auto root_b = bs_b.root();
+
+    // With effective mwl = 10, `update` skips the `min_waste <= 1` branch that
+    // forces z1/z2 to 1, so the expected first insertion has z1 = z2 = 0 —
+    // same as CutThickness3.
+    BranchingScheme::Insertion i0_b
+            = {0, -1, -1, 3000, 500, 3000, 6000, 3210, 0, 0};
+    std::vector<BranchingScheme::Insertion> is0_b =
+            bs_b.insertions(bs_b.children(root_b));
+    EXPECT_NE(std::find(is0_b.begin(), is0_b.end(), i0_b), is0_b.end());
+    auto node_b = bs_b.child(root_b, i0_b);
+
+    // Partial-cut variant is now forbidden; no follow-up insertion remains —
+    // same as CutThickness3.
+    std::vector<BranchingScheme::Insertion> is_b {};
+    EXPECT_EQ(bs_b.insertions(bs_b.children(node_b)), is_b);
 }
