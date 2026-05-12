@@ -251,7 +251,10 @@ void Instance::write(
         "BOTTOM_TRIM_TYPE,"
         "TOP_TRIM_TYPE,"
         "LEFT_TRIM_TYPE,"
-        "RIGHT_TRIM_TYPE" << std::endl;
+        "RIGHT_TRIM_TYPE,"
+        "MIN_WASTE_LENGTH,"
+        "MIN_DISTANCE_1_CUTS,"
+        "MIN_DISTANCE_2_CUTS" << std::endl;
     for (BinTypeId bin_type_id = 0;
             bin_type_id < number_of_bin_types();
             ++bin_type_id) {
@@ -270,7 +273,10 @@ void Instance::write(
             << bin_type.bottom_trim_type << ","
             << bin_type.top_trim_type << ","
             << bin_type.left_trim_type << ","
-            << bin_type.right_trim_type << std::endl;
+            << bin_type.right_trim_type << ","
+            << bin_type.minimum_waste_length << ","
+            << bin_type.minimum_distance_1_cuts << ","
+            << bin_type.minimum_distance_2_cuts << std::endl;
     }
 
     // Export defects.

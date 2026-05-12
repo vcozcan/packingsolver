@@ -87,13 +87,13 @@ void Solution::update_indicators(
         if (node.d == 2 && node.item_type_id == -1)
             second_leftover_value_ = (node.r - node.l) * (node.t - node.b);
 
-        // Check minimum waste length.
+        // Check minimum waste length (per-bin override resolved via effective_*).
         if (node.d >= 1
                 && node.item_type_id < 0) {
-            if ((node.r - node.l
-                        < instance().parameters().minimum_waste_length)
-                    || (node.t - node.b
-                        < instance().parameters().minimum_waste_length)) {
+            Length min_waste = effective_minimum_waste_length(
+                    bin_type, instance().parameters());
+            if ((node.r - node.l < min_waste)
+                    || (node.t - node.b < min_waste)) {
                 std::cout << "minimum_waste_length_feasible_ = false" << std::endl;
                 std::cout << "bin_pos " << bin_pos << " node " << node << std::endl;
                 minimum_waste_length_feasible_ = false;
@@ -101,15 +101,15 @@ void Solution::update_indicators(
             }
         }
 
-        // Check minimum distance between 1-cuts.
+        // Check minimum distance between 1-cuts (per-bin override resolved via effective_*).
         if (node.d == 1
                 && node.item_type_id == -2) {
+            Length min_dist_1 = effective_minimum_distance_1_cuts(
+                    bin_type, instance().parameters());
             if ((bin.first_cut_orientation == CutOrientation::Vertical
-                        && node.r - node.l
-                        < instance().parameters().minimum_distance_1_cuts)
+                        && node.r - node.l < min_dist_1)
                     || (bin.first_cut_orientation == CutOrientation::Horizontal
-                        && node.t - node.b
-                        < instance().parameters().minimum_distance_1_cuts)) {
+                        && node.t - node.b < min_dist_1)) {
                 //std::cout << "minimum_distance_1_cuts = false" << std::endl;
                 minimum_distance_1_cuts_feasible_ = false;
                 feasible_ = false;
@@ -133,15 +133,15 @@ void Solution::update_indicators(
             }
         }
 
-        // Check minimum distance between 2-cuts.
+        // Check minimum distance between 2-cuts (per-bin override resolved via effective_*).
         if (node.d == 2
                 && node.item_type_id == -2) {
+            Length min_dist_2 = effective_minimum_distance_2_cuts(
+                    bin_type, instance().parameters());
             if ((bin.first_cut_orientation == CutOrientation::Vertical
-                        && node.t - node.b
-                        < instance().parameters().minimum_distance_2_cuts)
+                        && node.t - node.b < min_dist_2)
                     || (bin.first_cut_orientation == CutOrientation::Horizontal
-                        && node.r - node.l
-                        < instance().parameters().minimum_distance_2_cuts)) {
+                        && node.r - node.l < min_dist_2)) {
                 //std::cout << "minimum_distance_2_cuts = false" << std::endl;
                 minimum_distance_2_cuts_feasible_ = false;
                 feasible_ = false;
