@@ -251,11 +251,19 @@ void Instance::write(
         "BOTTOM_TRIM_TYPE,"
         "TOP_TRIM_TYPE,"
         "LEFT_TRIM_TYPE,"
-        "RIGHT_TRIM_TYPE" << std::endl;
+        "RIGHT_TRIM_TYPE,"
+        "MIN_WASTE_LENGTH,"
+        "MIN_DISTANCE_1_CUTS,"
+        "MIN_DISTANCE_2_CUTS" << std::endl;
     for (BinTypeId bin_type_id = 0;
             bin_type_id < number_of_bin_types();
             ++bin_type_id) {
         const BinType& bin_type = this->bin_type(bin_type_id);
+        // The MIN_WASTE_LENGTH, MIN_DISTANCE_1_CUTS, MIN_DISTANCE_2_CUTS columns
+        // emit the raw sentinel `-1` for bins that do not carry a per-bin
+        // override. `read_bin_types` treats `-1` (and empty cells) as "inherit
+        // from Parameters", so the round-trip is lossless. Downstream consumers
+        // of this CSV must apply the same convention.
         f_bins
             << bin_type_id << ","
             << bin_type.rect.w << ","
@@ -270,7 +278,10 @@ void Instance::write(
             << bin_type.bottom_trim_type << ","
             << bin_type.top_trim_type << ","
             << bin_type.left_trim_type << ","
-            << bin_type.right_trim_type << std::endl;
+            << bin_type.right_trim_type << ","
+            << bin_type.minimum_waste_length << ","
+            << bin_type.minimum_distance_1_cuts << ","
+            << bin_type.minimum_distance_2_cuts << std::endl;
     }
 
     // Export defects.
@@ -415,6 +426,31 @@ std::ostream& Instance::format(
                 << std::setw(4) << bin_type.bottom_trim_type
                 << std::setw(8) << bin_type.top_trim
                 << std::setw(4) << bin_type.top_trim_type
+                << std::endl;
+        }
+
+        // Per-bin minimum_* overrides (-1 = inherit from Parameters).
+        os
+            << std::endl
+            << std::setw(12) << "Bin type"
+            << std::setw(16) << "Min waste len"
+            << std::setw(16) << "Min dist 1-cut"
+            << std::setw(16) << "Min dist 2-cut"
+            << std::endl
+            << std::setw(12) << "--------"
+            << std::setw(16) << "-------------"
+            << std::setw(16) << "--------------"
+            << std::setw(16) << "--------------"
+            << std::endl;
+        for (BinTypeId bin_type_id = 0;
+                bin_type_id < number_of_bin_types();
+                ++bin_type_id) {
+            const BinType& bin_type = this->bin_type(bin_type_id);
+            os
+                << std::setw(12) << bin_type_id
+                << std::setw(16) << bin_type.minimum_waste_length
+                << std::setw(16) << bin_type.minimum_distance_1_cuts
+                << std::setw(16) << bin_type.minimum_distance_2_cuts
                 << std::endl;
         }
 

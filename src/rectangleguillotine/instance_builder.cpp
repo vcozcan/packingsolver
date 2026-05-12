@@ -241,6 +241,66 @@ void InstanceBuilder::add_trims(
     bin_type.top_trim_type = top_trim_type;
 }
 
+void InstanceBuilder::set_bin_minimum_waste_length(
+        BinTypeId bin_type_id,
+        Length value)
+{
+    if (bin_type_id < 0 || bin_type_id >= instance_.bin_types_.size()) {
+        throw std::invalid_argument(
+                FUNC_SIGNATURE + ": "
+                "invalid 'bin_type_id'; "
+                "bin_type_id: " + std::to_string(bin_type_id) + "; "
+                "instance_.bin_types_.size(): " + std::to_string(instance_.bin_types_.size()) + ".");
+    }
+    if (value < -1) {
+        throw std::invalid_argument(
+                FUNC_SIGNATURE + ": "
+                "requires 'value >= -1' (use -1 to inherit from Parameters); "
+                "value: " + std::to_string(value) + ".");
+    }
+    instance_.bin_types_[bin_type_id].minimum_waste_length = value;
+}
+
+void InstanceBuilder::set_bin_minimum_distance_1_cuts(
+        BinTypeId bin_type_id,
+        Length value)
+{
+    if (bin_type_id < 0 || bin_type_id >= instance_.bin_types_.size()) {
+        throw std::invalid_argument(
+                FUNC_SIGNATURE + ": "
+                "invalid 'bin_type_id'; "
+                "bin_type_id: " + std::to_string(bin_type_id) + "; "
+                "instance_.bin_types_.size(): " + std::to_string(instance_.bin_types_.size()) + ".");
+    }
+    if (value < -1) {
+        throw std::invalid_argument(
+                FUNC_SIGNATURE + ": "
+                "requires 'value >= -1' (use -1 to inherit from Parameters); "
+                "value: " + std::to_string(value) + ".");
+    }
+    instance_.bin_types_[bin_type_id].minimum_distance_1_cuts = value;
+}
+
+void InstanceBuilder::set_bin_minimum_distance_2_cuts(
+        BinTypeId bin_type_id,
+        Length value)
+{
+    if (bin_type_id < 0 || bin_type_id >= instance_.bin_types_.size()) {
+        throw std::invalid_argument(
+                FUNC_SIGNATURE + ": "
+                "invalid 'bin_type_id'; "
+                "bin_type_id: " + std::to_string(bin_type_id) + "; "
+                "instance_.bin_types_.size(): " + std::to_string(instance_.bin_types_.size()) + ".");
+    }
+    if (value < -1) {
+        throw std::invalid_argument(
+                FUNC_SIGNATURE + ": "
+                "requires 'value >= -1' (use -1 to inherit from Parameters); "
+                "value: " + std::to_string(value) + ".");
+    }
+    instance_.bin_types_[bin_type_id].minimum_distance_2_cuts = value;
+}
+
 void InstanceBuilder::add_defect(
         BinTypeId bin_type_id,
         Length x,
@@ -295,6 +355,15 @@ void InstanceBuilder::add_bin_type(
                 defect.rect.w,
                 defect.rect.h);
     }
+    // Propagate per-bin overrides. Without this, sub-instance solvers
+    // (column generation, SVC, dichotomic search, InstanceFlipper) would
+    // silently zero out per-bin minimum_* values when copying bin types.
+    instance_.bin_types_[bin_type_id].minimum_waste_length =
+            bin_type.minimum_waste_length;
+    instance_.bin_types_[bin_type_id].minimum_distance_1_cuts =
+            bin_type.minimum_distance_1_cuts;
+    instance_.bin_types_[bin_type_id].minimum_distance_2_cuts =
+            bin_type.minimum_distance_2_cuts;
 }
 
 Length InstanceBuilder::compute_item_types_max_length_sum() const
@@ -578,6 +647,9 @@ void InstanceBuilder::read_bin_types(
         TrimType top_trim_type = TrimType::Soft;
         TrimType left_trim_type = TrimType::Hard;
         TrimType right_trim_type = TrimType::Soft;
+        Length min_waste = -1;
+        Length min_dist_1 = -1;
+        Length min_dist_2 = -1;
 
         for (Counter i = 0; i < (Counter)line.size(); ++i) {
             if (labels[i] == "WIDTH") {
@@ -610,6 +682,15 @@ void InstanceBuilder::read_bin_types(
             } else if (labels[i] == "RIGHT_TRIM_TYPE") {
                 std::stringstream ss(line[i]);
                 ss >> right_trim_type;
+            } else if (labels[i] == "MIN_WASTE_LENGTH") {
+                if (!line[i].empty())
+                    min_waste = (Length)std::stoll(line[i]);
+            } else if (labels[i] == "MIN_DISTANCE_1_CUTS") {
+                if (!line[i].empty())
+                    min_dist_1 = (Length)std::stoll(line[i]);
+            } else if (labels[i] == "MIN_DISTANCE_2_CUTS") {
+                if (!line[i].empty())
+                    min_dist_2 = (Length)std::stoll(line[i]);
             }
         }
 
@@ -640,6 +721,12 @@ void InstanceBuilder::read_bin_types(
                 bottom_trim_type,
                 top_trim,
                 top_trim_type);
+        if (min_waste != -1)
+            set_bin_minimum_waste_length(bin_type_id, min_waste);
+        if (min_dist_1 != -1)
+            set_bin_minimum_distance_1_cuts(bin_type_id, min_dist_1);
+        if (min_dist_2 != -1)
+            set_bin_minimum_distance_2_cuts(bin_type_id, min_dist_2);
     }
 }
 

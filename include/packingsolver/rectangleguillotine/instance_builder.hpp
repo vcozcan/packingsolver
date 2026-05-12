@@ -90,6 +90,21 @@ public:
             Length top_trim,
             TrimType top_trim_type);
 
+    /** Set per-bin minimum waste length. -1 means inherit from Parameters. */
+    void set_bin_minimum_waste_length(
+            BinTypeId bin_type_id,
+            Length value);
+
+    /** Set per-bin minimum distance between 1-cuts. -1 means inherit from Parameters. */
+    void set_bin_minimum_distance_1_cuts(
+            BinTypeId bin_type_id,
+            Length value);
+
+    /** Set per-bin minimum distance between 2-cuts. -1 means inherit from Parameters. */
+    void set_bin_minimum_distance_2_cuts(
+            BinTypeId bin_type_id,
+            Length value);
+
     /** Add a defect. */
     void add_defect(
             BinTypeId bin_type_id,

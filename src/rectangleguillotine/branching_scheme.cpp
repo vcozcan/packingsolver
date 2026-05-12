@@ -993,7 +993,7 @@ void BranchingScheme::insertion_1_item(
             // Place the item on top of its third-level sub-plate
             insertion.item_type_id_1 = -1;
             insertion.item_type_id_2 = item_type_id;
-            Length min_waste = instance.parameters().minimum_waste_length;
+            Length min_waste = effective_minimum_waste_length(bin_type, instance.parameters());
             if (df <= 0)  // y1_prev is the bottom trim.
                 if (bin_type.bottom_trim_type == TrimType::Soft)
                     min_waste = std::max(Length(0), min_waste - bin_type.bottom_trim);
@@ -1085,7 +1085,7 @@ void BranchingScheme::insertion_defect(
     const Defect& defect = bin_type.defects[defect_id];
     Length w = bin_type.rect.w - bin_type.right_trim;
     Length h = bin_type.rect.h - bin_type.top_trim;
-    Length min_waste = instance.parameters().minimum_waste_length;
+    Length min_waste = effective_minimum_waste_length(bin_type, instance.parameters());
     Length x_min = x3_prev(parent, df) + min_waste;
     Length y_min = y2_prev(parent, df) + min_waste;
     if (df <= -1)  // x1_prev is the left trim.
@@ -1118,10 +1118,10 @@ void BranchingScheme::update(
     CutOrientation o = last_bin_orientation(parent, insertion.df);
     BinPos i = last_bin(parent, insertion.df);
     const Instance& instance = this->instance(o);
-    Length min_waste = instance.parameters().minimum_waste_length;
-    Length cut_thickness = instance.parameters().cut_thickness;
     BinTypeId bin_type_id = instance.bin_type_id(i);
     const BinType& bin_type = instance.bin_type(bin_type_id);
+    Length min_waste = effective_minimum_waste_length(bin_type, instance.parameters());
+    Length cut_thickness = instance.parameters().cut_thickness;
     Length w_orig = bin_type.rect.w;
     Length h_orig = bin_type.rect.h;
     Length w = w_orig - bin_type.right_trim;
@@ -1143,29 +1143,31 @@ void BranchingScheme::update(
 
     // Update insertion.x1 and insertion.z1 with respect to min1cut()
     //std::cout << "- update min1cut  " << insertion << std::endl;
+    Length min_dist_1 = effective_minimum_distance_1_cuts(bin_type, instance.parameters());
     if ((insertion.item_type_id_1 != -1 || insertion.item_type_id_2 != -1)
-            && insertion.x1 - x1_prev(parent, insertion.df) < instance.parameters().minimum_distance_1_cuts) {
+            && insertion.x1 - x1_prev(parent, insertion.df) < min_dist_1) {
         if (insertion.z1 == 0) {
             insertion.x1 = std::max(
                     insertion.x1 + cut_thickness + min_waste,
-                    x1_prev(parent, insertion.df) + instance.parameters().minimum_distance_1_cuts);
+                    x1_prev(parent, insertion.df) + min_dist_1);
             insertion.z1 = 1;
         } else { // insertion.z1 = 1
-            insertion.x1 = x1_prev(parent, insertion.df) + instance.parameters().minimum_distance_1_cuts;
+            insertion.x1 = x1_prev(parent, insertion.df) + min_dist_1;
         }
     }
 
     // Update insertion.y2 and insertion.z2 with respect to min2cut()
     //std::cout << "- update min2cut  " << insertion << std::endl;
+    Length min_dist_2 = effective_minimum_distance_2_cuts(bin_type, instance.parameters());
     if ((insertion.item_type_id_1 != -1 || insertion.item_type_id_2 != -1)
-            && insertion.y2 - y2_prev(parent, insertion.df) < instance.parameters().minimum_distance_2_cuts) {
+            && insertion.y2 - y2_prev(parent, insertion.df) < min_dist_2) {
         if (insertion.z2 == 0) {
             insertion.y2 = std::max(
                     insertion.y2 + cut_thickness + min_waste,
-                    y2_prev(parent, insertion.df) + instance.parameters().minimum_distance_2_cuts);
+                    y2_prev(parent, insertion.df) + min_dist_2);
             insertion.z2 = 1;
         } else if (insertion.z2 == 1) {
-            insertion.y2 = y2_prev(parent, insertion.df) + instance.parameters().minimum_distance_2_cuts;
+            insertion.y2 = y2_prev(parent, insertion.df) + min_dist_2;
         } else { // insertion.z2 == 2
             return;
         }

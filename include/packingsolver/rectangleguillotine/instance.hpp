@@ -201,6 +201,15 @@ struct BinType
     /** Type of the right trim. */
     TrimType right_trim_type = TrimType::Soft;
 
+    /** Per-bin minimum waste length. -1 means use Parameters default. */
+    Length minimum_waste_length = -1;
+
+    /** Per-bin minimum distance between 1-cuts. -1 means use Parameters default. */
+    Length minimum_distance_1_cuts = -1;
+
+    /** Per-bin minimum distance between 2-cuts. -1 means use Parameters default. */
+    Length minimum_distance_2_cuts = -1;
+
     /*
      * Computed attributes
      */
@@ -214,6 +223,52 @@ struct BinType
 std::ostream& operator<<(
         std::ostream& os,
         const BinType& bin_type);
+
+/**
+ * Get the effective minimum waste length for a bin type.
+ *
+ * Returns the per-bin override when set (>= 0), otherwise the global
+ * Parameters default. Use this everywhere the solver branches or validates
+ * waste against `minimum_waste_length` so per-bin overrides are honoured.
+ */
+inline Length effective_minimum_waste_length(
+        const BinType& bin_type,
+        const Parameters& parameters)
+{
+    return (bin_type.minimum_waste_length >= 0)
+        ? bin_type.minimum_waste_length
+        : parameters.minimum_waste_length;
+}
+
+/**
+ * Get the effective minimum distance between 1-cuts for a bin type.
+ *
+ * Returns the per-bin override when set (>= 0), otherwise the global
+ * Parameters default.
+ */
+inline Length effective_minimum_distance_1_cuts(
+        const BinType& bin_type,
+        const Parameters& parameters)
+{
+    return (bin_type.minimum_distance_1_cuts >= 0)
+        ? bin_type.minimum_distance_1_cuts
+        : parameters.minimum_distance_1_cuts;
+}
+
+/**
+ * Get the effective minimum distance between 2-cuts for a bin type.
+ *
+ * Returns the per-bin override when set (>= 0), otherwise the global
+ * Parameters default.
+ */
+inline Length effective_minimum_distance_2_cuts(
+        const BinType& bin_type,
+        const Parameters& parameters)
+{
+    return (bin_type.minimum_distance_2_cuts >= 0)
+        ? bin_type.minimum_distance_2_cuts
+        : parameters.minimum_distance_2_cuts;
+}
 
 /**
  * Item type structure for a problem of type 'rectangleguillotine'.
