@@ -611,6 +611,8 @@ void InstanceBuilder::read_parameters(
             set_cut_through_defects(std::stol(value));
         } else if (name == "cut_thickness") {
             set_cut_thickness(std::stol(value));
+        } else if (name == "same_plate_sets") {
+            set_same_plate_sets(std::stol(value));
         }
     }
 }

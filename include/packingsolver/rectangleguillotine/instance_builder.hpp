@@ -62,6 +62,9 @@ public:
     /** Set cut thickness. */
     void set_cut_thickness(Length cut_thickness) { instance_.parameters_.cut_thickness = cut_thickness; }
 
+    /** Set whether every set must be cut entirely on a single bin (plate). */
+    void set_same_plate_sets(bool same_plate_sets) { instance_.parameters_.same_plate_sets = same_plate_sets; }
+
     void set_predefined(std::string str);
 
     void set_roadef2018();

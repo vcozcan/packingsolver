@@ -123,6 +123,14 @@ struct Parameters
 
     /** Cut thickness. */
     Length cut_thickness = 0;
+
+    /**
+     * Boolean indicating whether every set must be cut entirely on a single
+     * bin (plate). Opt-in; default 'false' keeps the historical behavior
+     * byte-for-byte. When 'true', the branching scheme forbids opening a new
+     * bin while any set is partially placed, so no set can straddle two bins.
+     */
+    bool same_plate_sets = false;
 };
 
 /**

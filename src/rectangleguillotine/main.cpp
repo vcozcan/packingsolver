@@ -86,6 +86,7 @@ int main(int argc, char *argv[])
         ("maximum-number-2-cuts,", po::value<Counter>(), "")
         ("cut-through-defects", po::value<bool>(), "")
         ("cut-thickness", po::value<Length>(), "")
+        ("same-plate-sets", po::value<bool>(), "")
 
         ("output,o", po::value<std::string>(), "Output path")
         ("certificate,c", po::value<std::string>(), "Certificate path")
@@ -215,6 +216,8 @@ int main(int argc, char *argv[])
         instance_builder.set_cut_through_defects(vm["cut-through-defects"].as<bool>());
     if (vm.count("cut-thickness"))
         instance_builder.set_cut_thickness(vm["cut-thickness"].as<Length>());
+    if (vm.count("same-plate-sets"))
+        instance_builder.set_same_plate_sets(vm["same-plate-sets"].as<bool>());
 
     Instance instance = instance_builder.build();
 

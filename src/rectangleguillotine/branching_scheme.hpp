@@ -312,6 +312,30 @@ public:
         return (!last_insertion_defect(*node));
     }
 
+    /**
+     * Return 'true' iff at least one set is partially placed in 'parent', i.e.
+     * some but not all of the items belonging to the set have been packed.
+     *
+     * Used only by the 'same_plate_sets' option to forbid opening a new bin
+     * while a set straddles the bin boundary. Reads only 'parent.pos_stack'
+     * and immutable 'instance_' arrays (the original, un-flipped instance), so
+     * it requires no Node field, no NodeHasher change and no dominance change.
+     */
+    inline bool any_set_partial(const Node& parent) const
+    {
+        for (SetId sid = 0; sid < instance_.number_of_sets(); ++sid) {
+            ItemPos placed = 0;
+            ItemPos total = 0;
+            for (StackId s: instance_.set_stacks(sid)) {
+                placed += parent.pos_stack[s];
+                total += instance_.stack_size(s);
+            }
+            if (placed > 0 && placed < total)
+                return true;
+        }
+        return false;
+    }
+
     struct NodeHasher
     {
         std::hash<ItemPos> hasher;

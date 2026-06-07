@@ -468,3 +468,205 @@ TEST(RectangleGuillotineSets, MultipleSetssolves)
     // All 18 items should be placed.
     EXPECT_EQ(output.solution_pool.best().number_of_items(), 18);
 }
+
+////////////////////////////////////////////////////////////////////////////////
+//////////////////////// same_plate_sets option tests //////////////////////////
+////////////////////////////////////////////////////////////////////////////////
+
+// Count the number of physical plates (bins, counting bin copies) that contain
+// at least one item belonging to set 'set_id' (the original, user-provided
+// SET_ID preserved on ItemType). When same_plate_sets is enabled this must be
+// exactly 1 for every set; the assertion is invariant to how the rest of the
+// solution is arranged, so it stays robust under Anytime nondeterminism.
+static int plates_with_set(const Solution& solution, SetId set_id)
+{
+    const Instance& instance = solution.instance();
+    int plates = 0;
+    for (BinPos bin_pos = 0;
+            bin_pos < solution.number_of_different_bins();
+            ++bin_pos) {
+        const SolutionBin& bin = solution.bin(bin_pos);
+        for (const SolutionNode& node: bin.nodes) {
+            if (node.f != -1
+                    && node.item_type_id >= 0
+                    && instance.item_type(node.item_type_id).set_id == set_id) {
+                plates += bin.copies;
+                break;
+            }
+        }
+    }
+    return plates;
+}
+
+TEST(RectangleGuillotineSets, SamePlateSetsDefaultOffNonSetRegression)
+{
+    // Non-set instance: the same_plate_sets code path must be completely inert
+    // when OFF (the default), so behavior is unchanged.
+    InstanceBuilder instance_builder;
+    instance_builder.set_objective(Objective::BinPackingWithLeftovers);
+    instance_builder.set_number_of_stages(3);
+    instance_builder.set_cut_type(CutType::NonExact);
+    instance_builder.add_item_type(1000, 500, -1, 4);
+    instance_builder.add_bin_type(2000, 1000, -1, 2);
+    Instance instance = instance_builder.build();
+
+    EXPECT_FALSE(instance.parameters().same_plate_sets);
+
+    OptimizeParameters optimize_parameters;
+    optimize_parameters.optimization_mode
+            = packingsolver::OptimizationMode::NotAnytimeSequential;
+    auto output = optimize(instance, optimize_parameters);
+
+    EXPECT_EQ(output.solution_pool.best().number_of_items(), 4);
+}
+
+TEST(RectangleGuillotineSets, SamePlateSetsDefaultOffSetUnchanged)
+{
+    // A set that fits on one bin, solved with the flag OFF: the set path is
+    // unaffected by the new parameter and all items are placed.
+    InstanceBuilder instance_builder;
+    instance_builder.set_objective(Objective::BinPackingWithLeftovers);
+    instance_builder.set_number_of_stages(3);
+    instance_builder.set_cut_type(CutType::NonExact);
+    instance_builder.add_item_type(1000, 500, -1, 2);
+    instance_builder.set_last_item_type_set(0, 2);
+    instance_builder.add_item_type(1000, 500, -1, 2);
+    instance_builder.set_last_item_type_set(0, 2);
+    instance_builder.add_bin_type(2000, 1000, -1, 2);
+    Instance instance = instance_builder.build();
+
+    EXPECT_TRUE(instance.has_sets());
+    EXPECT_FALSE(instance.parameters().same_plate_sets);
+
+    OptimizeParameters optimize_parameters;
+    optimize_parameters.optimization_mode
+            = packingsolver::OptimizationMode::NotAnytimeSequential;
+    auto output = optimize(instance, optimize_parameters);
+
+    EXPECT_EQ(output.solution_pool.best().number_of_items(), 4);
+}
+
+TEST(RectangleGuillotineSets, SamePlateSetsKeepsSetTogether)
+{
+    // Set (2 copies, fits one bin) + 3 non-set fillers; bins hold 2 pieces, so
+    // 3 bins are used. Without the flag the set could scatter; with it ON every
+    // set member must share a single plate. Anytime (the production mode) is
+    // used so the veto can redirect rather than dead-end.
+    InstanceBuilder instance_builder;
+    instance_builder.set_objective(Objective::BinPackingWithLeftovers);
+    instance_builder.set_number_of_stages(3);
+    instance_builder.set_cut_type(CutType::NonExact);
+    instance_builder.add_item_type(1000, 1000, -1, 2);  // set row, 2 copies
+    instance_builder.set_last_item_type_set(0, 1);
+    instance_builder.add_item_type(1000, 1000, -1, 3);  // non-set filler
+    instance_builder.add_bin_type(2000, 1000, -1, 3);
+    instance_builder.set_same_plate_sets(true);
+    Instance instance = instance_builder.build();
+
+    OptimizeParameters optimize_parameters;
+    optimize_parameters.optimization_mode
+            = packingsolver::OptimizationMode::Anytime;
+    optimize_parameters.verbosity_level = 0;
+    optimize_parameters.timer.set_time_limit(2.0);
+    auto output = optimize(instance, optimize_parameters);
+    const Solution& solution = output.solution_pool.best();
+
+    EXPECT_EQ(solution.number_of_items(), 5);   // all placed (no dead-end)
+    EXPECT_EQ(plates_with_set(solution, 0), 1);  // set kept on one plate
+}
+
+TEST(RectangleGuillotineSets, SamePlateSetsWholeSetMultiRow)
+{
+    // The case the active-row (% SET_SIZE) rule misses: a 2-row set with
+    // SET_SIZE=2 and COPIES=2 per row. After both copies of row A are placed
+    // (pos_stack[A]=2, 2 % 2 == 0 -> active-row rule does NOT fire), row B is
+    // still unplaced; only the WHOLE-SET veto keeps the set on one plate.
+    InstanceBuilder instance_builder;
+    instance_builder.set_objective(Objective::BinPackingWithLeftovers);
+    instance_builder.set_number_of_stages(3);
+    instance_builder.set_cut_type(CutType::NonExact);
+    instance_builder.add_item_type(1000, 500, -1, 2);  // set row A
+    instance_builder.set_last_item_type_set(0, 2);
+    instance_builder.add_item_type(1000, 500, -1, 2);  // set row B
+    instance_builder.set_last_item_type_set(0, 2);
+    instance_builder.add_item_type(1000, 500, -1, 2);  // non-set filler
+    instance_builder.add_bin_type(2000, 1000, -1, 3);
+    instance_builder.set_same_plate_sets(true);
+    Instance instance = instance_builder.build();
+
+    OptimizeParameters optimize_parameters;
+    optimize_parameters.optimization_mode
+            = packingsolver::OptimizationMode::Anytime;
+    optimize_parameters.verbosity_level = 0;
+    optimize_parameters.timer.set_time_limit(2.0);
+    auto output = optimize(instance, optimize_parameters);
+    const Solution& solution = output.solution_pool.best();
+
+    EXPECT_EQ(solution.number_of_items(), 6);   // all 4 set + 2 filler placed
+    EXPECT_EQ(plates_with_set(solution, 0), 1);  // whole set on one plate
+}
+
+TEST(RectangleGuillotineSets, SamePlateSetsMultipleSetsEachOnePlate)
+{
+    // Two independent single-row sets; each must land entirely on its own plate.
+    InstanceBuilder instance_builder;
+    instance_builder.set_objective(Objective::BinPackingWithLeftovers);
+    instance_builder.set_number_of_stages(3);
+    instance_builder.set_cut_type(CutType::NonExact);
+    instance_builder.add_item_type(1000, 1000, -1, 2);
+    instance_builder.set_last_item_type_set(0, 1);
+    instance_builder.add_item_type(1000, 1000, -1, 2);
+    instance_builder.set_last_item_type_set(1, 1);
+    instance_builder.add_bin_type(2000, 1000, -1, 3);
+    instance_builder.set_same_plate_sets(true);
+    Instance instance = instance_builder.build();
+
+    OptimizeParameters optimize_parameters;
+    optimize_parameters.optimization_mode
+            = packingsolver::OptimizationMode::Anytime;
+    optimize_parameters.verbosity_level = 0;
+    optimize_parameters.timer.set_time_limit(2.0);
+    auto output = optimize(instance, optimize_parameters);
+    const Solution& solution = output.solution_pool.best();
+
+    EXPECT_EQ(solution.number_of_items(), 4);
+    EXPECT_EQ(plates_with_set(solution, 0), 1);
+    EXPECT_EQ(plates_with_set(solution, 1), 1);
+}
+
+TEST(RectangleGuillotineSets, SamePlateSetsOversizedSetBites)
+{
+    // A single-row set of 3 copies of 1000x1000; each 2000x1000 bin holds only
+    // 2, so the whole set cannot fit on one plate. Deterministic greedy
+    // (NotAnytimeSequential) makes the contrast crisp:
+    //   - OFF: all 3 placed, the set spans 2 plates.
+    //   - ON:  the set cannot open a second bin while partial, so it is left
+    //          incomplete and what is placed stays on a single plate.
+    auto build = [](bool same_plate_sets) {
+        InstanceBuilder instance_builder;
+        instance_builder.set_objective(Objective::BinPackingWithLeftovers);
+        instance_builder.set_number_of_stages(3);
+        instance_builder.set_cut_type(CutType::NonExact);
+        instance_builder.add_item_type(1000, 1000, -1, 3);
+        instance_builder.set_last_item_type_set(0, 1);
+        instance_builder.add_bin_type(2000, 1000, -1, 2);
+        instance_builder.set_same_plate_sets(same_plate_sets);
+        return instance_builder.build();
+    };
+
+    OptimizeParameters optimize_parameters;
+    optimize_parameters.optimization_mode
+            = packingsolver::OptimizationMode::NotAnytimeSequential;
+
+    Instance instance_off = build(false);
+    auto output_off = optimize(instance_off, optimize_parameters);
+    const Solution& solution_off = output_off.solution_pool.best();
+    EXPECT_EQ(solution_off.number_of_items(), 3);
+    EXPECT_GE(plates_with_set(solution_off, 0), 2);  // OFF splits the set
+
+    Instance instance_on = build(true);
+    auto output_on = optimize(instance_on, optimize_parameters);
+    const Solution& solution_on = output_on.solution_pool.best();
+    EXPECT_LT(solution_on.number_of_items(), 3);      // ON cannot complete it
+    EXPECT_EQ(plates_with_set(solution_on, 0), 1);    // partial set stays put
+}

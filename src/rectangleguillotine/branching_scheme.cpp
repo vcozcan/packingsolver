@@ -539,6 +539,16 @@ std::vector<std::shared_ptr<BranchingScheme::Node>> BranchingScheme::children(
     if (parent.parent == nullptr)
         df_max = -1;
 
+    // same_plate_sets: forbid opening a new bin while any set is partially
+    // placed, so no set can straddle two bins. Hoisted out of the df loop
+    // because it depends only on 'parent', not 'df'. The two cheap bool
+    // guards short-circuit before the scan, so when the option is OFF (or
+    // there are no sets) this is a no-op and behavior is byte-identical.
+    const bool block_new_bin =
+            instance_.has_sets()
+            && instance_.parameters().same_plate_sets
+            && any_set_partial(parent);
+
     for (Depth df = df_max;; --df) {
         BinPos i = last_bin(parent, df);
         CutOrientation o = last_bin_orientation(parent, df);
@@ -555,6 +565,12 @@ std::vector<std::shared_ptr<BranchingScheme::Node>> BranchingScheme::children(
                 && df < 0) {
             break;
         }
+        // same_plate_sets: never open a new bin while a set is partial.
+        // df < 0 is the only transition that grows number_of_bins, and the
+        // loop only decrements df, so the df < 0 tail is all new-bin levels:
+        // break (matching the file's convention) rather than continue.
+        if (df < 0 && block_new_bin)
+            break;
 
         const Instance& instance = this->instance(first_stage_orientation_);
 

@@ -86,6 +86,61 @@ both items come from different rows of the same set, an additional check ensures
 the combined insertion does not violate the active-row constraint. Other cut
 types have no two-item insertion path, so sets are implicitly safe there.
 
+## `same_plate_sets` Option (opt-in single-plate sets)
+
+By default a set may straddle several bins (plates): its members are kept in the
+correct active-row order but can spill onto the next plate when the current one
+fills up. The optional **`same_plate_sets`** parameter forbids this — when
+enabled, **every set is cut entirely on a single plate**.
+
+- **Default:** `false`. When `false`, behavior, results and node size are
+  byte-for-byte identical to before this option existed (the gate short-circuits
+  before any extra work).
+- **Semantics:** the *whole set* lands on one bin. Members need **not** be
+  adjacent — they may scatter across the plate's rows/sub-plates. This is *not*
+  fusion (the set is not glued into one rigid rectangle); it is a search-space
+  restriction.
+- **Why:** if no set ever spans plates, any later whole-plate reordering (e.g.
+  rack optimization) is automatically set-feasible — moving a plate moves all of
+  a set's members together. The trade-off is a bounded amount of extra glass
+  waste.
+
+### Usage
+
+| Surface | How |
+|---------|-----|
+| CLI | `--same-plate-sets true` (boost `po::value<bool>()` — the value is required, a bare `--same-plate-sets` will error) |
+| Parameters CSV / `read_parameters` | row `same_plate_sets,1` |
+| `InstanceBuilder` | `set_same_plate_sets(true)` |
+| `Instance::write()` | round-trips as `same_plate_sets,<0|1>` in `_parameters.csv` |
+
+### Implementation
+
+Implemented as a **new-bin veto** in `BranchingScheme::children()`. Opening a new
+bin is the only transition that grows `number_of_bins`, and it happens iff the
+depth-field `df < 0`. While any set is *partial* (some but not all of its members
+placed — see `any_set_partial()` in `branching_scheme.hpp`), the `df < 0`
+transition is skipped, so the set can never be split across the bin boundary. The
+solver remains free to open a fresh plate *before* touching a set and lay the
+whole set there (the intended low-waste path); the veto only blocks opening a new
+bin *mid-set*.
+
+The predicate is **whole-set** (`placed > 0 && placed < total` summed over the
+set's stacks), distinct from and complementary to the active-row
+`pos_stack % SET_SIZE` rule (which only protects sub-group atomicity within a
+row). The active-row rule does `continue` (blocks an item placement); the veto
+does `break` (blocks opening a new bin). Neither subsumes the other — e.g. a
+2-row `SET_SIZE=2`, `COPIES=2` set can finish both copies of row A
+(`pos_stack[A]=2`, `2 % 2 == 0` → active-row rule does not fire) while row B is
+untouched, and only the whole-set veto prevents row B from spilling to the next
+plate.
+
+No `Node` field, `NodeHasher`, or dominance change is needed — the predicate
+reads only `parent.pos_stack` and immutable `instance_` arrays (the original,
+un-flipped instance), exactly like the active-row rule. The veto runs under
+`Anytime` (the production mode for set jobs), so Limitation #2 below
+(`NotAnytimeSequential` dead-ends) does not apply on this path.
+
 ## Internal Implementation
 
 ### Data model
@@ -205,7 +260,7 @@ to catch cases where no item has a valid SET_ID but some have SET_SIZE set.
 
 ## Test Coverage
 
-23 automated tests in `test/rectangleguillotine/sets_test.cpp`:
+29 automated tests in `test/rectangleguillotine/sets_test.cpp`:
 
 - **Instance building (6):** basic set, mixed set/non-set, multiple sets,
   sparse SET_IDs, non-set regression, mixed set + explicit stack
@@ -216,6 +271,11 @@ to catch cases where no item has a valid SET_ID but some have SET_SIZE set.
   stack_pred_ breaking
 - **Solve (5):** tree search forcing, incompatible algorithm rejection,
   single-row set, mixed set/non-set solve, multiple sets solve
+- **`same_plate_sets` (6):** default-OFF non-set regression, default-OFF set
+  unchanged, keeps a fitting set on one plate (Anytime), whole-set veto for a
+  multi-row SET_SIZE=2 set the active-row rule misses (Anytime), multiple sets
+  each on their own plate (Anytime), oversized-set bite — OFF splits across
+  plates while ON refuses to open a second bin mid-set (deterministic)
 
 Test data in `data/rectangleguillotine/tests/sets_*/`.
 
