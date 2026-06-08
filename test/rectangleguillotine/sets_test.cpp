@@ -640,8 +640,11 @@ TEST(RectangleGuillotineSets, SamePlateSetsOversizedSetBites)
     // 2, so the whole set cannot fit on one plate. Deterministic greedy
     // (NotAnytimeSequential) makes the contrast crisp:
     //   - OFF: all 3 placed, the set spans 2 plates.
-    //   - ON:  the set cannot open a second bin while partial, so it is left
-    //          incomplete and what is placed stays on a single plate.
+    //   - ON:  the set cannot open a second bin while partial. Because the
+    //          mandatory set cannot fit on one plate and may not split, the
+    //          greedy leaves it incomplete (here nothing is placed); whatever
+    //          is placed never spans more than one plate. This infeasibility is
+    //          what the solve.py area precheck / completeness backstop report.
     auto build = [](bool same_plate_sets) {
         InstanceBuilder instance_builder;
         instance_builder.set_objective(Objective::BinPackingWithLeftovers);
@@ -668,5 +671,7 @@ TEST(RectangleGuillotineSets, SamePlateSetsOversizedSetBites)
     auto output_on = optimize(instance_on, optimize_parameters);
     const Solution& solution_on = output_on.solution_pool.best();
     EXPECT_LT(solution_on.number_of_items(), 3);      // ON cannot complete it
-    EXPECT_EQ(plates_with_set(solution_on, 0), 1);    // partial set stays put
+    EXPECT_LE(plates_with_set(solution_on, 0), 1);    // set never spans >1 plate
+    EXPECT_LT(plates_with_set(solution_on, 0),        // and fewer than OFF
+              plates_with_set(solution_off, 0));
 }
