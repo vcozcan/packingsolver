@@ -54,7 +54,7 @@ int main(int argc, char *argv[])
     // Parse program options
     po::options_description desc("Allowed options");
     desc.add_options()
-        (",h", "Produce help message")
+        ("help,h", "Produce help message")
 
         ("items,i", po::value<std::string>()->required(), "Items path")
         ("bins,b", po::value<std::string>(), "Bins path")
@@ -112,6 +112,11 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    // Convert any input/build/optimize error into a readable message
+    // instead of letting the exception terminate the process (a missing
+    // column or unreadable path would otherwise abort silently).
+    try {
+
     // Build instance.
 
     InstanceBuilder instance_builder;
@@ -126,7 +131,13 @@ int main(int argc, char *argv[])
     } else if (fs::is_regular_file(instance_path + "/items.csv")) {
         instance_path = instance_path + "/";
     } else {
-        throw std::invalid_argument(FUNC_SIGNATURE);
+        throw std::invalid_argument(
+                FUNC_SIGNATURE + ": "
+                "unable to find an items file for \"" + instance_path + "\"; "
+                "expected a file at that exact path, or one of "
+                "\"" + instance_path + "items.csv\", "
+                "\"" + instance_path + "_items.csv\", "
+                "\"" + instance_path + "/items.csv\".");
     }
 
     if (instance_path.empty()) {
@@ -219,4 +230,8 @@ int main(int argc, char *argv[])
         output.write_json_output(vm["output"].as<std::string>());
 
     return 0;
+    } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+        return 1;
+    }
 }

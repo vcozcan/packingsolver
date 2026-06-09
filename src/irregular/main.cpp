@@ -51,7 +51,7 @@ int main(int argc, char *argv[])
     // Parse program options
     po::options_description desc("Allowed options");
     desc.add_options()
-        (",h", "Produce help message")
+        ("help,h", "Produce help message")
 
         ("input,i", po::value<std::string>()->required(), "Input path")
 
@@ -101,6 +101,11 @@ int main(int argc, char *argv[])
         std::cout << desc << std::endl;;
         return 1;
     }
+
+    // Convert any input/build/optimize error into a readable message
+    // instead of letting the exception terminate the process (a missing
+    // column or unreadable path would otherwise abort silently).
+    try {
 
     InstanceBuilder instance_builder;
 
@@ -170,4 +175,8 @@ int main(int argc, char *argv[])
         output.write_json_output(vm["output"].as<std::string>());
 
     return 0;
+    } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+        return 1;
+    }
 }
