@@ -299,6 +299,9 @@ python3 scripts/visualize_rectangle.py solution_rectangle.csv
 
 ## `box` solver
 
+> **Note:** The `box` solver is excluded from the default build. Reconfigure
+> with `-DPACKINGSOLVER_BUILD_BOX_SOLVERS=ON` to build `packingsolver_box`.
+
 Features:
 * Objectives:
   * Knapsack
@@ -570,6 +573,10 @@ python3 scripts/visualize_box.py solution_box.csv
 ```
 
 ## `boxstacks` solver
+
+> **Note:** The `boxstacks` solver is excluded from the default build.
+> Reconfigure with `-DPACKINGSOLVER_BUILD_BOX_SOLVERS=ON` to build
+> `packingsolver_boxstacks`.
 
 Features:
 * Objectives:
