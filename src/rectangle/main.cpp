@@ -1,5 +1,6 @@
 #include "packingsolver/rectangle/optimize.hpp"
 #include "packingsolver/rectangle/instance_builder.hpp"
+#include "packingsolver/algorithms/instance_path.hpp"
 
 #include <boost/program_options.hpp>
 #include <boost/filesystem.hpp>
@@ -100,15 +101,16 @@ int main(int argc, char *argv[])
         ("not-anytime-dichotomic-search-subproblem-queue-size,", po::value<Counter>(), "")
         ;
     po::variables_map vm;
-    po::store(po::parse_command_line(argc, argv, desc), vm);
-    if (vm.count("help")) {
-        std::cout << desc << std::endl;;
-        return 1;
-    }
     try {
+        po::store(po::parse_command_line(argc, argv, desc), vm);
+        if (vm.count("help")) {
+            std::cout << desc << std::endl;
+            return 0;
+        }
         po::notify(vm);
-    } catch (const po::required_option& e) {
-        std::cout << desc << std::endl;;
+    } catch (const po::error& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+        std::cout << desc << std::endl;
         return 1;
     }
 
@@ -121,24 +123,7 @@ int main(int argc, char *argv[])
 
     InstanceBuilder instance_builder;
 
-    std::string instance_path = vm["items"].as<std::string>();
-    if (fs::is_regular_file(instance_path)) {
-        instance_path = "";
-    } else if (fs::is_regular_file(instance_path + "_items.csv")) {
-        instance_path = instance_path + "_";
-    } else if (fs::is_regular_file(instance_path + "items.csv")) {
-        instance_path = instance_path;
-    } else if (fs::is_regular_file(instance_path + "/items.csv")) {
-        instance_path = instance_path + "/";
-    } else {
-        throw std::invalid_argument(
-                FUNC_SIGNATURE + ": "
-                "unable to find an items file for \"" + instance_path + "\"; "
-                "expected a file at that exact path, or one of "
-                "\"" + instance_path + "items.csv\", "
-                "\"" + instance_path + "_items.csv\", "
-                "\"" + instance_path + "/items.csv\".");
-    }
+    std::string instance_path = resolve_instance_path(vm["items"].as<std::string>());
 
     if (instance_path.empty()) {
         instance_builder.read_item_types(vm["items"].as<std::string>());
@@ -232,6 +217,9 @@ int main(int argc, char *argv[])
     return 0;
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << std::endl;
+        return 1;
+    } catch (...) {
+        std::cerr << "Error: unknown exception" << std::endl;
         return 1;
     }
 }

@@ -90,15 +90,16 @@ int main(int argc, char *argv[])
         ("not-anytime-dichotomic-search-subproblem-queue-size,", po::value<Counter>(), "")
         ;
     po::variables_map vm;
-    po::store(po::parse_command_line(argc, argv, desc), vm);
-    if (vm.count("help")) {
-        std::cout << desc << std::endl;;
-        return 1;
-    }
     try {
+        po::store(po::parse_command_line(argc, argv, desc), vm);
+        if (vm.count("help")) {
+            std::cout << desc << std::endl;
+            return 0;
+        }
         po::notify(vm);
-    } catch (const po::required_option& e) {
-        std::cout << desc << std::endl;;
+    } catch (const po::error& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+        std::cout << desc << std::endl;
         return 1;
     }
 
@@ -177,6 +178,9 @@ int main(int argc, char *argv[])
     return 0;
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << std::endl;
+        return 1;
+    } catch (...) {
+        std::cerr << "Error: unknown exception" << std::endl;
         return 1;
     }
 }
