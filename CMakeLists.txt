@@ -10,6 +10,11 @@ option(PACKINGSOLVER_USE_KNITRO "Use Knitro" OFF)
 # Build options.
 option(PACKINGSOLVER_BUILD_MAIN "Build main" ON)
 option(PACKINGSOLVER_BUILD_TEST "Build unit tests" ON)
+# The box and boxstacks solvers are excluded from the default build: they are
+# rarely used here and slow the build down (and currently hit a Windows
+# MAX_PATH issue in the deep _deps tree). Re-enable with
+# -DPACKINGSOLVER_BUILD_BOX_SOLVERS=ON when a project needs them.
+option(PACKINGSOLVER_BUILD_BOX_SOLVERS "Build box and boxstacks solvers" OFF)
 
 # Avoid FetchContent warning.
 cmake_policy(SET CMP0135 NEW)
