@@ -3,6 +3,7 @@
 #include "rectangleguillotine/branching_scheme.hpp"
 #include "rectangleguillotine/instance_flipper.hpp"
 #include "rectangleguillotine/solution_builder.hpp"
+#include "sets_oracle.hpp"
 
 #include <gtest/gtest.h>
 #include <boost/filesystem.hpp>
@@ -781,6 +782,228 @@ TEST(RectangleGuillotineSets, SingleBinKnapsackExplicitSvcStillRejected)
 
     EXPECT_THROW(optimize(instance, optimize_parameters),
                  std::invalid_argument);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+//////////////////// Non-TS enablement end-to-end tests ////////////////////////
+////////////////////////////////////////////////////////////////////////////////
+
+namespace
+{
+
+// Multi-bin sets instance: two sets across three rows, ~25 M mm2 of
+// items against 19.26 M mm2 plates, so at least two bins are needed.
+Instance sets_multi_bin_instance(Objective objective, int number_of_bin_types)
+{
+    InstanceBuilder instance_builder;
+    instance_builder.set_objective(objective);
+    instance_builder.set_number_of_stages(3);
+    instance_builder.set_cut_type(CutType::NonExact);
+    instance_builder.add_item_type(1500, 1000, -1, 8);
+    instance_builder.set_last_item_type_set(0, 2);
+    instance_builder.add_item_type(1200, 800, -1, 8);
+    instance_builder.set_last_item_type_set(0, 2);
+    instance_builder.add_item_type(1000, 600, -1, 9);
+    instance_builder.set_last_item_type_set(1, 3);
+    instance_builder.add_bin_type(6000, 3210, -1, 5);
+    if (number_of_bin_types > 1)
+        instance_builder.add_bin_type(4000, 3000, -1, 5);
+    return instance_builder.build();
+}
+
+void expect_sets_enablement_ok(const Instance& instance, const Solution& best)
+{
+    EXPECT_EQ(best.number_of_items(), instance.number_of_items());
+    EXPECT_TRUE(best.sets_feasible());
+    EXPECT_TRUE(best.sets_complete());
+    SetsOracleResult oracle = check_sets_oracle(instance, best);
+    EXPECT_TRUE(oracle.order_ok);
+    EXPECT_TRUE(oracle.tail_ok);
+}
+
+}
+
+TEST(RectangleGuillotineSets, SskBppSetsEndToEnd)
+{
+    Instance instance = sets_multi_bin_instance(Objective::BinPacking, 1);
+
+    OptimizeParameters optimize_parameters;
+    optimize_parameters.optimization_mode
+            = packingsolver::OptimizationMode::NotAnytimeSequential;
+    optimize_parameters.use_sequential_single_knapsack = true;
+    auto output = optimize(instance, optimize_parameters);
+
+    expect_sets_enablement_ok(instance, output.solution_pool.best());
+}
+
+TEST(RectangleGuillotineSets, SvcBpplSetsEndToEnd)
+{
+    // BPPL exercises SVC's last-bin re-optimization path.
+    Instance instance = sets_multi_bin_instance(
+            Objective::BinPackingWithLeftovers, 1);
+
+    OptimizeParameters optimize_parameters;
+    optimize_parameters.optimization_mode
+            = packingsolver::OptimizationMode::NotAnytimeSequential;
+    optimize_parameters.use_sequential_value_correction = true;
+    auto output = optimize(instance, optimize_parameters);
+
+    expect_sets_enablement_ok(instance, output.solution_pool.best());
+}
+
+TEST(RectangleGuillotineSets, SvcVbppSetsEndToEnd)
+{
+    Instance instance = sets_multi_bin_instance(
+            Objective::VariableSizedBinPacking, 2);
+
+    OptimizeParameters optimize_parameters;
+    optimize_parameters.optimization_mode
+            = packingsolver::OptimizationMode::NotAnytimeSequential;
+    optimize_parameters.use_sequential_value_correction = true;
+    auto output = optimize(instance, optimize_parameters);
+
+    expect_sets_enablement_ok(instance, output.solution_pool.best());
+}
+
+TEST(RectangleGuillotineSets, DsVbppSetsEndToEnd)
+{
+    Instance instance = sets_multi_bin_instance(
+            Objective::VariableSizedBinPacking, 2);
+
+    OptimizeParameters optimize_parameters;
+    optimize_parameters.optimization_mode
+            = packingsolver::OptimizationMode::NotAnytimeSequential;
+    optimize_parameters.use_dichotomic_search = true;
+    auto output = optimize(instance, optimize_parameters);
+
+    expect_sets_enablement_ok(instance, output.solution_pool.best());
+}
+
+////////////////////////////////////////////////////////////////////////////////
+///////////////////////// Auto-selection coverage //////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
+
+namespace
+{
+
+// Shaped so the pre-gate auto-selection pool would have included
+// column generation: one bin type, stacks == item_types (always true
+// for sets), mean copies (14) above the mean items-per-bin ratio
+// (19.26 M / 1.5 M = 12.84 <= many_items_in_bins_threshold 16) — the
+// SVC+CG auto branch. The gate must drop CG without leaving the pool
+// empty.
+Instance sets_auto_select_instance(Objective objective, int number_of_bin_types)
+{
+    InstanceBuilder instance_builder;
+    instance_builder.set_objective(objective);
+    instance_builder.set_number_of_stages(3);
+    instance_builder.set_cut_type(CutType::NonExact);
+    instance_builder.add_item_type(1500, 1000, -1, 14);
+    instance_builder.set_last_item_type_set(0, 2);
+    instance_builder.add_item_type(1500, 1000, -1, 14);
+    instance_builder.set_last_item_type_set(1, 2);
+    instance_builder.add_bin_type(6000, 3210, -1, 5);
+    if (number_of_bin_types > 1)
+        instance_builder.add_bin_type(4000, 3000, -1, 5);
+    return instance_builder.build();
+}
+
+}
+
+TEST(RectangleGuillotineSets, AutoSelectBppSets)
+{
+    Instance instance = sets_auto_select_instance(Objective::BinPacking, 1);
+
+    OptimizeParameters optimize_parameters;
+    optimize_parameters.optimization_mode
+            = packingsolver::OptimizationMode::NotAnytimeSequential;
+    auto output = optimize(instance, optimize_parameters);
+
+    expect_sets_enablement_ok(instance, output.solution_pool.best());
+}
+
+TEST(RectangleGuillotineSets, AutoSelectBpplSets)
+{
+    Instance instance = sets_auto_select_instance(
+            Objective::BinPackingWithLeftovers, 1);
+
+    OptimizeParameters optimize_parameters;
+    optimize_parameters.optimization_mode
+            = packingsolver::OptimizationMode::NotAnytimeSequential;
+    auto output = optimize(instance, optimize_parameters);
+
+    expect_sets_enablement_ok(instance, output.solution_pool.best());
+}
+
+TEST(RectangleGuillotineSets, AutoSelectVbppMultiBinSets)
+{
+    Instance instance = sets_auto_select_instance(
+            Objective::VariableSizedBinPacking, 2);
+
+    OptimizeParameters optimize_parameters;
+    optimize_parameters.optimization_mode
+            = packingsolver::OptimizationMode::NotAnytimeSequential;
+    auto output = optimize(instance, optimize_parameters);
+
+    expect_sets_enablement_ok(instance, output.solution_pool.best());
+}
+
+////////////////////////////////////////////////////////////////////////////////
+/////////////////////////// Stacks regressions /////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
+
+// Stacks (precedence) have never been algorithm-gated; these pin that
+// SSK/SVC keep producing stacks-feasible certificates.
+
+TEST(RectangleGuillotineSets, SskBppStacksRegression)
+{
+    InstanceBuilder instance_builder;
+    instance_builder.set_objective(Objective::BinPacking);
+    instance_builder.set_number_of_stages(3);
+    instance_builder.set_cut_type(CutType::NonExact);
+    instance_builder.add_item_type(1500, 1000, -1, 6, false, 0);
+    instance_builder.add_item_type(1200, 800, -1, 6, false, 0);
+    instance_builder.add_item_type(1000, 600, -1, 8, false, 1);
+    instance_builder.add_item_type(900, 500, -1, 8, false, 1);
+    instance_builder.add_bin_type(6000, 3210, -1, 5);
+    Instance instance = instance_builder.build();
+
+    OptimizeParameters optimize_parameters;
+    optimize_parameters.optimization_mode
+            = packingsolver::OptimizationMode::NotAnytimeSequential;
+    optimize_parameters.use_sequential_single_knapsack = true;
+    auto output = optimize(instance, optimize_parameters);
+
+    const Solution& best = output.solution_pool.best();
+    EXPECT_EQ(best.number_of_items(), instance.number_of_items());
+    EXPECT_TRUE(best.stacks_feasible());
+    EXPECT_TRUE(best.feasible());
+}
+
+TEST(RectangleGuillotineSets, SvcVbppStacksRegression)
+{
+    InstanceBuilder instance_builder;
+    instance_builder.set_objective(Objective::VariableSizedBinPacking);
+    instance_builder.set_number_of_stages(3);
+    instance_builder.set_cut_type(CutType::NonExact);
+    instance_builder.add_item_type(1500, 1000, -1, 6, false, 0);
+    instance_builder.add_item_type(1200, 800, -1, 6, false, 0);
+    instance_builder.add_item_type(1000, 600, -1, 8, false, 1);
+    instance_builder.add_item_type(900, 500, -1, 8, false, 1);
+    instance_builder.add_bin_type(6000, 3210, -1, 5);
+    instance_builder.add_bin_type(4000, 3000, -1, 5);
+    Instance instance = instance_builder.build();
+
+    OptimizeParameters optimize_parameters;
+    optimize_parameters.optimization_mode
+            = packingsolver::OptimizationMode::NotAnytimeSequential;
+    optimize_parameters.use_sequential_value_correction = true;
+    auto output = optimize(instance, optimize_parameters);
+
+    const Solution& best = output.solution_pool.best();
+    EXPECT_EQ(best.number_of_items(), instance.number_of_items());
+    EXPECT_TRUE(best.stacks_feasible());
+    EXPECT_TRUE(best.feasible());
 }
 
 TEST(RectangleGuillotineSets, SingleRowSetSolves)
