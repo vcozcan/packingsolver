@@ -90,6 +90,11 @@ BranchingScheme::BranchingScheme(
                 }
             }
         }
+
+        // Stacks belonging to a set, for sets_complete().
+        for (StackId s = 0; s < instance.number_of_stacks(); ++s)
+            if (instance.set_id_of_stack(s) != -1)
+                set_stack_list_.push_back(s);
     }
 }
 
@@ -192,6 +197,11 @@ bool BranchingScheme::better(
 {
     switch (instance().objective()) {
     case Objective::Default: {
+        // Same sets guard as the Knapsack case below (defensive; the
+        // Default objective is profit-driven and may stop short of a
+        // full placement too).
+        if (!set_stack_list_.empty() && !sets_complete(*node_1))
+            return false;
         if (node_2->profit > node_1->profit)
             return false;
         if (node_2->profit < node_1->profit)
@@ -224,6 +234,14 @@ bool BranchingScheme::better(
             return true;
         return height(*node_2) > height(*node_1);
     } case Objective::Knapsack: {
+        // Sets: only accept sub-group-complete nodes into the solution
+        // pool. Queue admission goes through leaf()/bound(), not
+        // better(), so mid-sub-group nodes remain explorable — they
+        // just cannot be retained as a result. This is what keeps
+        // SVC/SSK single-bin patterns from cutting a sub-group in half
+        // (the divisibility of the remaining copies depends on it).
+        if (!set_stack_list_.empty() && !sets_complete(*node_1))
+            return false;
         return node_2->profit < node_1->profit;
     } default: {
         std::stringstream ss;

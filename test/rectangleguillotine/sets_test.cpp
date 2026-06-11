@@ -428,6 +428,32 @@ TEST(RectangleGuillotineSets, StackPredDifferentSetSizeBroken)
     EXPECT_NE(root, nullptr);
 }
 
+TEST(RectangleGuillotineSets, KnapsackTreeSearchOnlyAcceptsCompleteSubGroups)
+{
+    // Knapsack + sets: the bin fits 3 copies of the row (profit says
+    // place 3), but better() must only retain sub-group-complete
+    // nodes, so the best solution keeps 2 (one full pair).
+    InstanceBuilder instance_builder;
+    instance_builder.set_objective(Objective::Knapsack);
+    instance_builder.set_number_of_stages(3);
+    instance_builder.set_cut_type(CutType::NonExact);
+    instance_builder.add_item_type(1000, 500, -1, 4);
+    instance_builder.set_last_item_type_set(0, 2);
+    instance_builder.add_bin_type(1000, 1600);
+    Instance instance = instance_builder.build();
+
+    OptimizeParameters optimize_parameters;
+    optimize_parameters.optimization_mode
+            = packingsolver::OptimizationMode::NotAnytimeSequential;
+    auto output = optimize(instance, optimize_parameters);
+
+    const Solution& best = output.solution_pool.best();
+    EXPECT_EQ(best.number_of_items(), 2);
+    EXPECT_EQ(best.item_copies(0) % 2, 0);
+    EXPECT_TRUE(best.sets_feasible());
+    EXPECT_TRUE(best.sets_complete());
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 //////////////////////// Solution sets checker tests ///////////////////////////
 ////////////////////////////////////////////////////////////////////////////////
