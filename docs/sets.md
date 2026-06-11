@@ -139,7 +139,11 @@ stack-index invariance between the two is load-bearing.
 Copied set items legitimately carry both `set_id` and a (materialized)
 `stack_id`; they are exempted from the user-input mutual-exclusion check via a
 builder-private registry (`internal_copy_item_type_ids_`). User input paths
-still throw.
+still throw. The exemption is shape-checked rather than blindly trusted: the
+overload is public, so `build()` additionally requires every exempted set item
+to be the only item type on its stack (the only shape a previous `build()` can
+produce) — a hand-built `ItemType` sharing another item's stack throws instead
+of stamping set metadata onto the foreign stack.
 
 ### Solution-level companion checker
 
@@ -243,18 +247,21 @@ to catch cases where no item has a valid SET_ID but some have SET_SIZE set.
 
 ## Test Coverage
 
-51 automated tests in `test/rectangleguillotine/sets_test.cpp`:
+52 automated tests in `test/rectangleguillotine/sets_test.cpp`:
 
 - **Instance building (6):** basic set, mixed set/non-set, multiple sets,
   sparse SET_IDs, non-set regression, mixed set + explicit stack
 - **Validation (7):** per-item mutual exclusion, copies divisibility, SET_SIZE
   without SET_ID, orphan SET_SIZE, negative SET_ID, missing SET_SIZE, SET_SIZE=0
 - **CSV parsing (3):** basic, mixed, multiple sets
-- **Internal copy / flipper (4):** mixed-composition flipper round trip with
+- **Internal copy / flipper (5):** mixed-composition flipper round trip with
   exact stack-mapping asserts, mutual exclusion still rejected on user input,
   mutual exclusion still rejected on a reused builder (exemption registry
-  cleared between builds), sparse-subset copy (SVC's actual path: exhausted
-  row → phantom back-filled stack, indices and set metadata preserved)
+  cleared between builds), mutual exclusion still rejected on a hand-built
+  copy sharing another item's stack (exempted set items must keep their
+  materialized singleton stack), sparse-subset copy (SVC's actual path:
+  exhausted row → phantom back-filled stack, indices and set metadata
+  preserved)
 - **Branching scheme (3):** cross-set stack_pred_ breaking, different-SET_SIZE
   stack_pred_ breaking, Knapsack sub-group-complete acceptance
 - **Solution checker (7):** interleaving detection, cross-bin straddling,

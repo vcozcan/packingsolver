@@ -1868,6 +1868,17 @@ Solution BranchingScheme::to_solution(
             throw std::logic_error(
                     FUNC_SIGNATURE + ": solution doesn't satisfy sets.");
         }
+        // Strict end-state: update_indicators() deliberately leaves
+        // trailing-incomplete sub-groups feasible (bins arrive
+        // incrementally), but a fully reconstructed certificate must
+        // not end mid-sub-group. Unreachable today — better() accepts
+        // only sets-complete nodes (Knapsack/Default guard, leaf() for
+        // fullness objectives) — so this catches a future regression
+        // of that rule rather than any current behavior.
+        if (!solution.sets_complete()) {
+            throw std::logic_error(
+                    FUNC_SIGNATURE + ": solution doesn't satisfy sets completeness.");
+        }
     }
     if (!solution.defects_feasible()) {
         throw std::logic_error(

@@ -415,6 +415,35 @@ TEST(RectangleGuillotineSets, MutualExclusionRejectedOnBuilderReuse)
     EXPECT_THROW(instance_builder.build(), std::invalid_argument);
 }
 
+TEST(RectangleGuillotineSets, MutualExclusionRejectedOnSharedStackCopy)
+{
+    // The copy overload is public, so a hand-built ItemType carrying
+    // both SET_ID and a STACK_ID shared with another item type would
+    // earn the V10 exemption and stamp set metadata onto the foreign
+    // stack. build() verifies the exemption's safe shape instead of
+    // trusting it: a copied set item must be alone on its stack.
+    InstanceBuilder instance_builder;
+    instance_builder.set_objective(Objective::BinPackingWithLeftovers);
+    instance_builder.set_number_of_stages(3);
+    instance_builder.set_cut_type(CutType::NonExact);
+    instance_builder.add_bin_type(6000, 3210);
+
+    // Non-set item on explicit stack 0.
+    instance_builder.add_item_type(1500, 1000, -1, 2, false, 0);
+
+    // Hand-built set item claiming the same stack 0.
+    ItemType forged;
+    forged.rect.w = 1000;
+    forged.rect.h = 500;
+    forged.copies = 2;
+    forged.stack_id = 0;
+    forged.set_id = 0;
+    forged.set_size = 2;
+    instance_builder.add_item_type(forged, -1, 2);
+
+    EXPECT_THROW(instance_builder.build(), std::invalid_argument);
+}
+
 TEST(RectangleGuillotineSets, SubsetCopyPreservesSparseStacks)
 {
     // SVC's KP subproblem copies only the item types with remaining

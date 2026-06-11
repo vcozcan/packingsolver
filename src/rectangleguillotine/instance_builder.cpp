@@ -899,6 +899,22 @@ void InstanceBuilder::read_item_types(
 Instance InstanceBuilder::build()
 {
     // --- Sets: validate ---
+    // The exemption registry cannot prove provenance (the copy overload
+    // is public), but the shape that makes the exemption safe can be
+    // checked: build() only ever materializes set items into singleton
+    // stacks, so a legitimately copied set item is the only item type
+    // on its stack. A shared stack marks a hand-built ItemType whose
+    // set metadata would overwrite the foreign stack's state.
+    std::map<StackId, ItemPos> item_types_per_explicit_stack;
+    if (!internal_copy_item_type_ids_.empty()) {
+        for (ItemTypeId item_type_id = 0;
+                item_type_id < instance_.number_of_item_types();
+                ++item_type_id) {
+            StackId stack_id = instance_.item_type(item_type_id).stack_id;
+            if (stack_id >= 0)
+                item_types_per_explicit_stack[stack_id]++;
+        }
+    }
     bool has_any_set = false;
     for (ItemTypeId item_type_id = 0;
             item_type_id < instance_.number_of_item_types();
@@ -909,12 +925,22 @@ Instance InstanceBuilder::build()
         // Items registered by the internal copy overload are exempt:
         // their stack_id is the singleton stack a previous build()
         // materialized, not user input.
-        if (item_type.set_id >= 0 && item_type.stack_id >= 0
-                && internal_copy_item_type_ids_.count(item_type_id) == 0) {
-            throw std::invalid_argument(
-                    "item type " + std::to_string(item_type_id)
-                    + " has both SET_ID and explicit STACK_ID."
-                    " They are mutually exclusive on the same item.");
+        if (item_type.set_id >= 0 && item_type.stack_id >= 0) {
+            if (internal_copy_item_type_ids_.count(item_type_id) == 0) {
+                throw std::invalid_argument(
+                        "item type " + std::to_string(item_type_id)
+                        + " has both SET_ID and explicit STACK_ID."
+                        " They are mutually exclusive on the same item.");
+            }
+            if (item_types_per_explicit_stack[item_type.stack_id] > 1) {
+                throw std::invalid_argument(
+                        "item type " + std::to_string(item_type_id)
+                        + " has SET_ID and shares STACK_ID "
+                        + std::to_string(item_type.stack_id)
+                        + " with another item type."
+                        " A copied set item must keep the singleton stack"
+                        " materialized by build().");
+            }
         }
     }
 

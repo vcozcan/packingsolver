@@ -72,8 +72,7 @@ public:
         instance_(&instance),
         bin_copies_(instance.number_of_bin_types(), 0),
         item_copies_(instance.number_of_item_types(), 0),
-        set_active_item_type_(instance.number_of_sets(), -1),
-        set_active_run_count_(instance.number_of_sets(), 0)
+        set_active_states_(instance.number_of_sets())
     { }
 
     void append(
@@ -314,11 +313,32 @@ private:
      * the original (possibly sparse) ItemType::set_id.
      */
 
-    /** Item type currently mid-sub-group per set (-1 if none). */
-    std::vector<ItemTypeId> set_active_item_type_;
+    /** Active sub-group state of one set during the replay. */
+    struct ActiveSetState
+    {
+        /** Item type currently mid-sub-group (-1 if none). */
+        ItemTypeId item_type_id = -1;
 
-    /** Copies of that item type in the current sub-group so far. */
-    std::vector<ItemPos> set_active_run_count_;
+        /** Copies of that item type in the current sub-group so far. */
+        ItemPos run_count = 0;
+
+        bool operator==(const ActiveSetState& other) const
+        {
+            return item_type_id == other.item_type_id
+                && run_count == other.run_count;
+        }
+
+        /** Lexicographic order so state vectors can key a std::map. */
+        bool operator<(const ActiveSetState& other) const
+        {
+            if (item_type_id != other.item_type_id)
+                return item_type_id < other.item_type_id;
+            return run_count < other.run_count;
+        }
+    };
+
+    /** Active state per set. */
+    std::vector<ActiveSetState> set_active_states_;
 
     /** Total area of the items of the solution. */
     Area item_area_ = 0;
