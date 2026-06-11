@@ -382,6 +382,93 @@ TEST(RectangleGuillotineSets, MutualExclusionStillRejectedAfterCopySupport)
     EXPECT_THROW(instance_builder.build(), std::invalid_argument);
 }
 
+TEST(RectangleGuillotineSets, MutualExclusionRejectedOnBuilderReuse)
+{
+    // The exemption registry is keyed by item type id; a reused builder
+    // restarts ids at 0, colliding with ids exempted during the first
+    // build. Stale entries must not suppress the mutual-exclusion
+    // throw on the second build.
+    InstanceBuilder source_builder;
+    source_builder.set_objective(Objective::BinPackingWithLeftovers);
+    source_builder.set_number_of_stages(3);
+    source_builder.set_cut_type(CutType::NonExact);
+    source_builder.add_item_type(1000, 500, -1, 2);
+    source_builder.set_last_item_type_set(0, 2);
+    source_builder.add_bin_type(6000, 3210);
+    Instance source = source_builder.build();
+
+    // First build: the internal copy overload exempts item id 0.
+    InstanceBuilder instance_builder;
+    instance_builder.set_objective(Objective::BinPackingWithLeftovers);
+    instance_builder.set_number_of_stages(3);
+    instance_builder.set_cut_type(CutType::NonExact);
+    instance_builder.add_item_type(source.item_type(0), -1, 2);
+    instance_builder.add_bin_type(6000, 3210);
+    Instance first = instance_builder.build();
+    EXPECT_TRUE(first.has_sets());
+
+    // Reuse: a user item with both SET_ID and explicit STACK_ID lands
+    // on the colliding id 0 and must still throw.
+    instance_builder.add_item_type(1000, 500, -1, 2, false, 0);
+    instance_builder.set_last_item_type_set(0, 2);
+
+    EXPECT_THROW(instance_builder.build(), std::invalid_argument);
+}
+
+TEST(RectangleGuillotineSets, SubsetCopyPreservesSparseStacks)
+{
+    // SVC's KP subproblem copies only the item types with remaining
+    // copies > 0. When one row of a set is exhausted while its twin
+    // survives, the surviving copy carries its original — now
+    // non-contiguous — stack_id and build() back-fills phantom empty
+    // stacks. Stack indices and dense set metadata must survive
+    // unchanged (FlipperRoundTripPropagatesSets only covers the
+    // full-copy path).
+    InstanceBuilder source_builder;
+    source_builder.set_objective(Objective::BinPackingWithLeftovers);
+    source_builder.set_number_of_stages(3);
+    source_builder.set_cut_type(CutType::NonExact);
+    source_builder.add_item_type(1000, 500, -1, 4);   // row A, set 0
+    source_builder.set_last_item_type_set(0, 2);
+    source_builder.add_item_type(600, 400, -1, 4);    // row B, set 0
+    source_builder.set_last_item_type_set(0, 2);
+    source_builder.add_item_type(800, 300, -1, 3);    // non-set
+    source_builder.add_bin_type(6000, 3210);
+    Instance source = source_builder.build();
+    ASSERT_EQ(source.number_of_stacks(), 3);
+
+    // Subset copy: row A exhausted; row B and the non-set item remain.
+    InstanceBuilder subset_builder;
+    subset_builder.set_objective(Objective::Knapsack);
+    subset_builder.set_number_of_stages(3);
+    subset_builder.set_cut_type(CutType::NonExact);
+    subset_builder.add_item_type(
+            source.item_type(1), source.item_type(1).profit, 2);
+    subset_builder.add_item_type(
+            source.item_type(2), source.item_type(2).profit, 3);
+    subset_builder.add_bin_type(6000, 3210);
+    Instance subset = subset_builder.build();
+
+    ASSERT_EQ(subset.number_of_item_types(), 2);
+    // Original stack ids preserved; the exhausted row's stack 0 is
+    // back-filled as a phantom empty stack.
+    EXPECT_EQ(subset.number_of_stacks(), source.number_of_stacks());
+    EXPECT_EQ(subset.item_type(0).stack_id, source.item_type(1).stack_id);
+    EXPECT_EQ(subset.item_type(1).stack_id, source.item_type(2).stack_id);
+    // Dense set metadata intact: one set, carried by row B's stack;
+    // the phantom stack carries none.
+    EXPECT_TRUE(subset.has_sets());
+    EXPECT_EQ(subset.number_of_sets(), 1);
+    EXPECT_EQ(subset.set_id_of_stack(subset.item_type(0).stack_id), 0);
+    EXPECT_EQ(subset.set_size_of_stack(subset.item_type(0).stack_id), 2);
+    EXPECT_EQ(subset.set_id_of_stack(0), -1);
+    EXPECT_EQ(subset.set_id_of_stack(subset.item_type(1).stack_id), -1);
+
+    // The branching scheme must root on the sparse-stack subinstance.
+    BranchingScheme branching_scheme(subset);
+    EXPECT_NE(branching_scheme.root(), nullptr);
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 ////////////////////////// Branching scheme tests //////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////
@@ -647,6 +734,88 @@ TEST(RectangleGuillotineSets, UpdateIndicatorsHighCopyBin)
     }
 }
 
+TEST(RectangleGuillotineSets, UpdateIndicatorsHighCopyMidRunSkipKeepsState)
+{
+    // A one-item pattern of a set row alternates the entering state
+    // between idle and mid-run (period 2 — the replay cycle skip must
+    // land on the exact final state, not just stop early). The second
+    // bin then probes that state with the other row of the same set.
+    InstanceBuilder instance_builder = sets_checker_instance_builder();
+    instance_builder.add_item_type(1000, 500, -1, 100);
+    instance_builder.set_last_item_type_set(0, 2);
+    instance_builder.add_item_type(600, 400, -1, 100);
+    instance_builder.set_last_item_type_set(0, 2);
+    instance_builder.add_bin_type(6000, 3210, -1, 200);
+    Instance instance = instance_builder.build();
+
+    // Odd copies: bin 1 exits mid-run of row A, so row B starting
+    // bin 2 interleaves → violation.
+    {
+        SolutionBuilder solution_builder(instance);
+        solution_builder.add_bin(0, 99, CutOrientation::Vertical);
+        solution_builder.add_node(1, 1000);
+        solution_builder.add_node(2, 500);
+        solution_builder.set_last_node_item(0);
+        solution_builder.add_bin(0, 1, CutOrientation::Vertical);
+        solution_builder.add_node(1, 600);
+        solution_builder.add_node(2, 400);
+        solution_builder.set_last_node_item(1);
+        Solution solution = solution_builder.build();
+        EXPECT_FALSE(solution.sets_feasible());
+    }
+
+    // Even copies: bin 1 exits idle, a complete pair of row B in
+    // bin 2 is clean.
+    {
+        SolutionBuilder solution_builder(instance);
+        solution_builder.add_bin(0, 100, CutOrientation::Vertical);
+        solution_builder.add_node(1, 1000);
+        solution_builder.add_node(2, 500);
+        solution_builder.set_last_node_item(0);
+        solution_builder.add_bin(0, 1, CutOrientation::Vertical);
+        solution_builder.add_node(1, 600);
+        solution_builder.add_node(2, 400);
+        solution_builder.set_last_node_item(1);
+        solution_builder.add_node(2, 800);
+        solution_builder.set_last_node_item(1);
+        Solution solution = solution_builder.build();
+        EXPECT_TRUE(solution.sets_feasible());
+        EXPECT_TRUE(solution.sets_complete());
+    }
+}
+
+TEST(RectangleGuillotineSets, UpdateIndicatorsLatePassViolation)
+{
+    // Pattern A,A,B,B,A is clean on the first plate (entering idle)
+    // but violates on the second (entering mid-run of A, so the new
+    // A run is open when B arrives). Pins that the cycle skip never
+    // bypasses a not-yet-seen entering state.
+    InstanceBuilder instance_builder = sets_checker_instance_builder();
+    instance_builder.add_item_type(1000, 500, -1, 6);
+    instance_builder.set_last_item_type_set(0, 2);
+    instance_builder.add_item_type(1000, 500, -1, 4);
+    instance_builder.set_last_item_type_set(0, 2);
+    instance_builder.add_bin_type(6000, 3210, -1, 2);
+    Instance instance = instance_builder.build();
+
+    SolutionBuilder solution_builder(instance);
+    solution_builder.add_bin(0, 2, CutOrientation::Vertical);
+    solution_builder.add_node(1, 1000);
+    solution_builder.add_node(2, 500);
+    solution_builder.set_last_node_item(0);
+    solution_builder.add_node(2, 1000);
+    solution_builder.set_last_node_item(0);
+    solution_builder.add_node(2, 1500);
+    solution_builder.set_last_node_item(1);
+    solution_builder.add_node(2, 2000);
+    solution_builder.set_last_node_item(1);
+    solution_builder.add_node(2, 2500);
+    solution_builder.set_last_node_item(0);
+    Solution solution = solution_builder.build();
+
+    EXPECT_FALSE(solution.sets_feasible());
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 ///////////////////////// Algorithm selection tests ////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////
@@ -738,6 +907,36 @@ TEST(RectangleGuillotineSets, ExplicitColumnGeneration2Rejected)
 
     EXPECT_THROW(optimize(instance, optimize_parameters),
                  std::invalid_argument);
+}
+
+TEST(RectangleGuillotineSets, KnapsackColumnGenerationMessageIsObjectiveAware)
+{
+    // Under Knapsack the CG rejection must not recommend SSK/SVC/DS —
+    // they are themselves rejected for this objective.
+    InstanceBuilder instance_builder;
+    instance_builder.set_objective(Objective::Knapsack);
+    instance_builder.set_number_of_stages(3);
+    instance_builder.set_cut_type(CutType::NonExact);
+    instance_builder.add_item_type(1000, 500, -1, 4);
+    instance_builder.set_last_item_type_set(0, 2);
+    instance_builder.add_bin_type(6000, 3210);
+    Instance instance = instance_builder.build();
+
+    OptimizeParameters optimize_parameters;
+    optimize_parameters.optimization_mode
+            = packingsolver::OptimizationMode::NotAnytimeSequential;
+    optimize_parameters.use_column_generation = true;
+
+    try {
+        optimize(instance, optimize_parameters);
+        FAIL() << "expected std::invalid_argument";
+    } catch (const std::invalid_argument& e) {
+        std::string message = e.what();
+        EXPECT_NE(message.find("Use tree search for this objective."),
+                  std::string::npos);
+        EXPECT_EQ(message.find("sequential single knapsack"),
+                  std::string::npos);
+    }
 }
 
 TEST(RectangleGuillotineSets, KnapsackExplicitSvcStillRejected)
@@ -938,6 +1137,69 @@ TEST(RectangleGuillotineSets, AutoSelectBpplSets)
 TEST(RectangleGuillotineSets, AutoSelectVbppMultiBinSets)
 {
     Instance instance = sets_auto_select_instance(
+            Objective::VariableSizedBinPacking, 2);
+
+    OptimizeParameters optimize_parameters;
+    optimize_parameters.optimization_mode
+            = packingsolver::OptimizationMode::NotAnytimeSequential;
+    auto output = optimize(instance, optimize_parameters);
+
+    expect_sets_enablement_ok(instance, output.solution_pool.best());
+}
+
+namespace
+{
+
+// Shaped like sets_auto_select_instance (many-copies branch: mean
+// copies 11 > items-per-bin ratio ~8 <= threshold 16, so the pre-gate
+// pool is SVC+CG with no tree search), but with one set of two
+// 3500x3210 rows: two such copies cannot share a 6000-wide bin, so
+// every sub-group must straddle bins — unplaceable by SSK/SVC
+// patterns. The gate must keep a straddling-capable algorithm (tree
+// search, or dichotomic search for multi-bin-type VBPP) in automatic
+// pools or the run ends with the oversized rows unplaced.
+Instance sets_auto_select_oversized_instance(
+        Objective objective, int number_of_bin_types)
+{
+    InstanceBuilder instance_builder;
+    instance_builder.set_objective(objective);
+    instance_builder.set_number_of_stages(3);
+    instance_builder.set_cut_type(CutType::NonExact);
+    instance_builder.add_item_type(3500, 3210, -1, 2);
+    instance_builder.set_last_item_type_set(0, 2);
+    instance_builder.add_item_type(3500, 3210, -1, 2);
+    instance_builder.set_last_item_type_set(0, 2);
+    instance_builder.add_item_type(1500, 1000, -1, 20);
+    instance_builder.add_item_type(1500, 1000, -1, 20);
+    instance_builder.add_bin_type(6000, 3210, -1, 10);
+    if (number_of_bin_types > 1)
+        instance_builder.add_bin_type(4000, 3000, -1, 10);
+    return instance_builder.build();
+}
+
+}
+
+TEST(RectangleGuillotineSets, AutoSelectBppSetsOversizedSubGroup)
+{
+    Instance instance = sets_auto_select_oversized_instance(
+            Objective::BinPacking, 1);
+
+    OptimizeParameters optimize_parameters;
+    optimize_parameters.optimization_mode
+            = packingsolver::OptimizationMode::NotAnytimeSequential;
+    auto output = optimize(instance, optimize_parameters);
+
+    expect_sets_enablement_ok(instance, output.solution_pool.best());
+}
+
+TEST(RectangleGuillotineSets, AutoSelectVbppMultiBinSetsOversizedSubGroup)
+{
+    // 3500x3210 fits no orientation of the 4000x3000 bin type, so the
+    // oversized rows force the larger type; dichotomic search (whose
+    // probes are tree-search-backed) is the straddling-capable cover
+    // here because tree search itself is unavailable for
+    // multi-bin-type variable-sized bin packing.
+    Instance instance = sets_auto_select_oversized_instance(
             Objective::VariableSizedBinPacking, 2);
 
     OptimizeParameters optimize_parameters;

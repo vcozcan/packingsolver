@@ -240,6 +240,11 @@ bool BranchingScheme::better(
         // just cannot be retained as a result. This is what keeps
         // SVC/SSK single-bin patterns from cutting a sub-group in half
         // (the divisibility of the remaining copies depends on it).
+        // The rule is keyed on the objective, not on "this is a
+        // subproblem": SSK/SVC/DS all solve their inner problems under
+        // Knapsack or BinPacking (full placement) today. A future
+        // outer algorithm using a different inner objective must
+        // extend this rule or half-sub-groups would be retained.
         if (!set_stack_list_.empty() && !sets_complete(*node_1))
             return false;
         return node_2->profit < node_1->profit;
@@ -1850,13 +1855,19 @@ Solution BranchingScheme::to_solution(
         throw std::logic_error(
                 FUNC_SIGNATURE + ": solution doesn't satisfy maximum number of 2-cuts.");
     }
-    if (!solution.stacks_feasible()) {
-        throw std::logic_error(
-                FUNC_SIGNATURE + ": solution doesn't satisfy stacks.");
-    }
-    if (!solution.sets_feasible()) {
-        throw std::logic_error(
-                FUNC_SIGNATURE + ": solution doesn't satisfy sets.");
+    // Stacks and sets are cross-bin logical invariants; a last-bin-only
+    // reconstruction (json_export, --json-search-tree) legally starts
+    // mid-stack or mid-sub-group, so only full reconstructions are
+    // checked. The per-bin geometric checks stay unconditional.
+    if (!only_last_bin) {
+        if (!solution.stacks_feasible()) {
+            throw std::logic_error(
+                    FUNC_SIGNATURE + ": solution doesn't satisfy stacks.");
+        }
+        if (!solution.sets_feasible()) {
+            throw std::logic_error(
+                    FUNC_SIGNATURE + ": solution doesn't satisfy sets.");
+        }
     }
     if (!solution.defects_feasible()) {
         throw std::logic_error(

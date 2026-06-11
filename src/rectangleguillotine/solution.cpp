@@ -254,12 +254,39 @@ void Solution::update_indicators(
     // sub-group would transiently look incomplete; strict end-state is
     // exposed via sets_complete(). Flags only — no exit(1).
     if (instance().has_sets()) {
-        bool all_idle_before = true;
-        for (SetId sid = 0; sid < instance().number_of_sets(); ++sid)
-            if (set_active_item_type_[sid] != -1)
-                all_idle_before = false;
+        // Each replay pass is a deterministic function of the entering
+        // per-set state (violations included — the resync keeps the
+        // evolution deterministic), so once an entering state repeats,
+        // the remaining passes replicate already-checked behavior with
+        // a fixed period. Jump straight to the final entering state:
+        // this keeps high-copy pattern bins O(nodes x distinct states)
+        // and subsumes the idle-in/idle-out case (period 1). The
+        // canonical mid-run pattern (odd count of one row straddling
+        // into the next plate) has period 2, which a plain fixed-point
+        // check would miss.
+        std::vector<std::vector<ItemTypeId>> entering_types;
+        std::vector<std::vector<ItemPos>> entering_counts;
         for (BinPos copy = 0; copy < bin.copies; ++copy) {
-            bool violation_in_pass = false;
+            BinPos cycle_start = -1;
+            for (BinPos pass = 0;
+                    pass < (BinPos)entering_types.size();
+                    ++pass) {
+                if (entering_types[pass] == set_active_item_type_
+                        && entering_counts[pass] == set_active_run_count_) {
+                    cycle_start = pass;
+                    break;
+                }
+            }
+            if (cycle_start >= 0) {
+                BinPos period = copy - cycle_start;
+                BinPos final_pass = cycle_start
+                    + (bin.copies - cycle_start) % period;
+                set_active_item_type_ = entering_types[final_pass];
+                set_active_run_count_ = entering_counts[final_pass];
+                break;
+            }
+            entering_types.push_back(set_active_item_type_);
+            entering_counts.push_back(set_active_run_count_);
             for (const SolutionNode& node: bin.nodes) {
                 if (node.d < 1 || node.item_type_id < 0)
                     continue;
@@ -275,7 +302,6 @@ void Solution::update_indicators(
                     // Another row of the same set is mid-sub-group.
                     sets_feasible_ = false;
                     feasible_ = false;
-                    violation_in_pass = true;
                     // Resync on the new row so later checks stay
                     // meaningful.
                     set_active_item_type_[sid] = -1;
@@ -290,17 +316,6 @@ void Solution::update_indicators(
                     set_active_item_type_[sid] = -1;
                     set_active_run_count_[sid] = 0;
                 }
-            }
-            // Fast path: if no set was mid-run when the bin started
-            // and the first pass ends idle without violation, the
-            // remaining copies replay identically — skip them.
-            if (copy == 0 && all_idle_before && !violation_in_pass) {
-                bool all_idle_after = true;
-                for (SetId sid = 0; sid < instance().number_of_sets(); ++sid)
-                    if (set_active_item_type_[sid] != -1)
-                        all_idle_after = false;
-                if (all_idle_after)
-                    break;
             }
         }
     }

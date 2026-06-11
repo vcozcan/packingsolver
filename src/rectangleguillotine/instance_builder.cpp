@@ -1116,5 +1116,10 @@ Instance InstanceBuilder::build()
                 "an instance with objective OpenDimensionY must contain exactly one bin.");
     }
 
-    return std::move(instance_);
+    // The exemption registry is keyed by item type id; a reused builder
+    // restarts ids at 0, so stale entries could let user-input items
+    // bypass the mutual-exclusion check on a later build.
+    Instance out = std::move(instance_);
+    internal_copy_item_type_ids_.clear();
+    return out;
 }

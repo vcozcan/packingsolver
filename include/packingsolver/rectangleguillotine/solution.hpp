@@ -43,7 +43,15 @@ struct SolutionBin
     /** First cut orientation. */
     CutOrientation first_cut_orientation;
 
-    /** Nodes. */
+    /**
+     * Nodes.
+     *
+     * Storage order is the physical cut order. The Solution sets
+     * checker (update_indicators) replays this order to validate
+     * sub-group consecutiveness, and to_solution() throws on a
+     * violation — a future pass that reorders or merges nodes would
+     * flag valid solutions as infeasible.
+     */
     std::vector<SolutionNode> nodes;
 };
 

@@ -183,11 +183,18 @@ Support is **per objective**:
 - The gate reads the raw requested flags, so an explicit incompatible request
   is rejected even when an upstream normalization (e.g. the single-bin
   branch) already cleared the local flag.
+- Automatic pools always retain a straddling-capable algorithm: when the
+  resolved pool contains neither tree search nor dichotomic search and the
+  user did not explicitly choose SSK/SVC, the gate adds tree search (or
+  dichotomic search for multi-bin-type VBPP, whose probes are
+  tree-search-backed). Without this, the many-copies auto-selection branches
+  (SSK-only or SVC+CG) would leave a feasible instance with an oversized
+  sub-group unplaced.
 
 **Structural note (accepted):** a sub-group that cannot complete within one
 bin pattern can never be packed by SSK/SVC (tree search can straddle bins).
-This yields a partial solution, never a violation; keep tree search in the
-pool as the floor.
+This yields a partial solution, never a violation; an explicit SSK/SVC-only
+selection accepts this floor, automatic selection never hits it (see above).
 
 ### Performance
 
@@ -236,29 +243,36 @@ to catch cases where no item has a valid SET_ID but some have SET_SIZE set.
 
 ## Test Coverage
 
-44 automated tests in `test/rectangleguillotine/sets_test.cpp`:
+51 automated tests in `test/rectangleguillotine/sets_test.cpp`:
 
 - **Instance building (6):** basic set, mixed set/non-set, multiple sets,
   sparse SET_IDs, non-set regression, mixed set + explicit stack
 - **Validation (7):** per-item mutual exclusion, copies divisibility, SET_SIZE
   without SET_ID, orphan SET_SIZE, negative SET_ID, missing SET_SIZE, SET_SIZE=0
 - **CSV parsing (3):** basic, mixed, multiple sets
-- **Internal copy / flipper (2):** mixed-composition flipper round trip with
-  exact stack-mapping asserts, mutual exclusion still rejected on user input
+- **Internal copy / flipper (4):** mixed-composition flipper round trip with
+  exact stack-mapping asserts, mutual exclusion still rejected on user input,
+  mutual exclusion still rejected on a reused builder (exemption registry
+  cleared between builds), sparse-subset copy (SVC's actual path: exhausted
+  row → phantom back-filled stack, indices and set metadata preserved)
 - **Branching scheme (3):** cross-set stack_pred_ breaking, different-SET_SIZE
   stack_pred_ breaking, Knapsack sub-group-complete acceptance
-- **Solution checker (5):** interleaving detection, cross-bin straddling,
-  lenient trailing, sparse-set-id dense indexing, high-copy bin replay
+- **Solution checker (7):** interleaving detection, cross-bin straddling,
+  lenient trailing, sparse-set-id dense indexing, high-copy bin replay,
+  cycle-skip final-state correctness (period-2 mid-run pattern), late-pass
+  violation (clean first plate, violating second)
 - **Non-TS enablement end-to-end (4):** SSK+BPP, SVC+BPPL (last-bin reopt),
   SVC+VBPP, DS+VBPP — full placement + certificate oracle
   (`sets_oracle.hpp`, a port of the analysis harness checker)
-- **Auto-selection (3):** BPP / BPPL / VBPP-multi-bin with no algorithm flags,
-  shaped so the pre-gate pool would have included CG
+- **Auto-selection (5):** BPP / BPPL / VBPP-multi-bin with no algorithm flags,
+  shaped so the pre-gate pool would have included CG; BPP and
+  VBPP-multi-bin oversized-sub-group regressions pinning that automatic
+  pools retain a straddling-capable algorithm
 - **Stacks regressions (2):** SSK+BPP and SVC+VBPP on stack instances
-- **Gate / solve (9):** tree search forcing, explicit CG / CG2 rejection,
-  Knapsack explicit SVC rejection (multi-bin and single-bin), SVC+BPPL
-  allowed end-to-end, single-row set, mixed set/non-set solve, multiple sets
-  solve
+- **Gate / solve (10):** tree search forcing, explicit CG / CG2 rejection,
+  objective-aware CG message under Knapsack, Knapsack explicit SVC rejection
+  (multi-bin and single-bin), SVC+BPPL allowed end-to-end, single-row set,
+  mixed set/non-set solve, multiple sets solve
 
 Test data in `data/rectangleguillotine/tests/sets_*/`.
 
