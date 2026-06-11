@@ -2,6 +2,7 @@
 #include "packingsolver/rectangleguillotine/optimize.hpp"
 #include "rectangleguillotine/branching_scheme.hpp"
 #include "rectangleguillotine/instance_flipper.hpp"
+#include "rectangleguillotine/solution_builder.hpp"
 
 #include <gtest/gtest.h>
 #include <boost/filesystem.hpp>
@@ -425,6 +426,198 @@ TEST(RectangleGuillotineSets, StackPredDifferentSetSizeBroken)
     BranchingScheme branching_scheme(instance);
     auto root = branching_scheme.root();
     EXPECT_NE(root, nullptr);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+//////////////////////// Solution sets checker tests ///////////////////////////
+////////////////////////////////////////////////////////////////////////////////
+
+namespace
+{
+
+// Bin 6000x3210, vertical first cut, 3 stages, NonExact — the house
+// configuration. Items are placed via one d=1 strip per column with
+// stacked d=2 children, so the node order in the certificate equals
+// the placement order below.
+InstanceBuilder sets_checker_instance_builder()
+{
+    InstanceBuilder instance_builder;
+    instance_builder.set_objective(Objective::BinPackingWithLeftovers);
+    instance_builder.set_number_of_stages(3);
+    instance_builder.set_cut_type(CutType::NonExact);
+    return instance_builder;
+}
+
+}
+
+TEST(RectangleGuillotineSets, UpdateIndicatorsDetectsInterleaving)
+{
+    // Two rows of the same set interleaved A,B,A,B — the classic
+    // twin-interleaving violation.
+    InstanceBuilder instance_builder = sets_checker_instance_builder();
+    instance_builder.add_item_type(1000, 500, -1, 2);
+    instance_builder.set_last_item_type_set(0, 2);
+    instance_builder.add_item_type(1000, 500, -1, 2);
+    instance_builder.set_last_item_type_set(0, 2);
+    instance_builder.add_bin_type(6000, 3210);
+    Instance instance = instance_builder.build();
+
+    SolutionBuilder solution_builder(instance);
+    solution_builder.add_bin(0, 1, CutOrientation::Vertical);
+    solution_builder.add_node(1, 1000);
+    solution_builder.add_node(2, 500);
+    solution_builder.set_last_node_item(0);
+    solution_builder.add_node(2, 1000);
+    solution_builder.set_last_node_item(1);
+    solution_builder.add_node(2, 1500);
+    solution_builder.set_last_node_item(0);
+    solution_builder.add_node(2, 2000);
+    solution_builder.set_last_node_item(1);
+    Solution solution = solution_builder.build();
+
+    EXPECT_FALSE(solution.sets_feasible());
+    EXPECT_FALSE(solution.feasible());
+    // Counts are pairwise complete — completeness is a separate axis.
+    EXPECT_TRUE(solution.sets_complete());
+}
+
+TEST(RectangleGuillotineSets, UpdateIndicatorsAllowsStraddling)
+{
+    // A sub-group split across two bins is legal: plates are cut in
+    // sequence, so the twins are still consecutive.
+    InstanceBuilder instance_builder = sets_checker_instance_builder();
+    instance_builder.add_item_type(1000, 500, -1, 2);
+    instance_builder.set_last_item_type_set(0, 2);
+    instance_builder.add_bin_type(6000, 3210, -1, 2);
+    Instance instance = instance_builder.build();
+
+    SolutionBuilder solution_builder(instance);
+    solution_builder.add_bin(0, 1, CutOrientation::Vertical);
+    solution_builder.add_node(1, 1000);
+    solution_builder.add_node(2, 500);
+    solution_builder.set_last_node_item(0);
+    solution_builder.add_bin(0, 1, CutOrientation::Vertical);
+    solution_builder.add_node(1, 1000);
+    solution_builder.add_node(2, 500);
+    solution_builder.set_last_node_item(0);
+    Solution solution = solution_builder.build();
+
+    EXPECT_TRUE(solution.sets_feasible());
+    EXPECT_TRUE(solution.feasible());
+    EXPECT_TRUE(solution.sets_complete());
+}
+
+TEST(RectangleGuillotineSets, UpdateIndicatorsLenientTrailing)
+{
+    // A trailing incomplete sub-group does not flip feasible_ (bins
+    // arrive incrementally); it only shows up in sets_complete().
+    InstanceBuilder instance_builder = sets_checker_instance_builder();
+    instance_builder.add_item_type(1000, 500, -1, 4);
+    instance_builder.set_last_item_type_set(0, 2);
+    instance_builder.add_bin_type(6000, 3210);
+    Instance instance = instance_builder.build();
+
+    SolutionBuilder solution_builder(instance);
+    solution_builder.add_bin(0, 1, CutOrientation::Vertical);
+    solution_builder.add_node(1, 1000);
+    solution_builder.add_node(2, 500);
+    solution_builder.set_last_node_item(0);
+    Solution solution = solution_builder.build();
+
+    EXPECT_TRUE(solution.sets_feasible());
+    EXPECT_TRUE(solution.feasible());
+    EXPECT_FALSE(solution.sets_complete());
+}
+
+TEST(RectangleGuillotineSets, UpdateIndicatorsSparseSetIds)
+{
+    // SparseSetIds fixture shape (SET_IDs 50123/99999). The checker
+    // state is sized number_of_sets() (dense) — it must index through
+    // set_id_of_stack(), never through the sparse ItemType::set_id.
+    InstanceBuilder instance_builder = sets_checker_instance_builder();
+    instance_builder.add_item_type(1000, 500, -1, 4);
+    instance_builder.set_last_item_type_set(50123, 2);
+    instance_builder.add_item_type(600, 400, -1, 4);
+    instance_builder.set_last_item_type_set(50123, 2);
+    instance_builder.add_item_type(800, 300, -1, 6);
+    instance_builder.set_last_item_type_set(99999, 3);
+    instance_builder.add_bin_type(6000, 3210);
+    Instance instance = instance_builder.build();
+
+    // Complete run of set 99999 (3x item 2), then item 0 placed once
+    // (mid-sub-group), then item 1 of the same set 50123 → violation.
+    SolutionBuilder solution_builder(instance);
+    solution_builder.add_bin(0, 1, CutOrientation::Vertical);
+    solution_builder.add_node(1, 800);
+    solution_builder.add_node(2, 300);
+    solution_builder.set_last_node_item(2);
+    solution_builder.add_node(2, 600);
+    solution_builder.set_last_node_item(2);
+    solution_builder.add_node(2, 900);
+    solution_builder.set_last_node_item(2);
+    solution_builder.add_node(1, 1800);
+    solution_builder.add_node(2, 500);
+    solution_builder.set_last_node_item(0);
+    solution_builder.add_node(1, 2400);
+    solution_builder.add_node(2, 400);
+    solution_builder.set_last_node_item(1);
+    Solution solution = solution_builder.build();
+
+    EXPECT_FALSE(solution.sets_feasible());
+}
+
+TEST(RectangleGuillotineSets, UpdateIndicatorsHighCopyBin)
+{
+    // Replicated bins are k sequential plates.
+    InstanceBuilder instance_builder = sets_checker_instance_builder();
+    instance_builder.add_item_type(1000, 500, -1, 100);
+    instance_builder.set_last_item_type_set(0, 2);
+    instance_builder.add_item_type(600, 400, -1, 100);
+    instance_builder.set_last_item_type_set(0, 2);
+    instance_builder.add_bin_type(6000, 3210, -1, 200);
+    Instance instance = instance_builder.build();
+
+    // Clean: 50 copies of a self-contained pattern (one complete pair).
+    {
+        SolutionBuilder solution_builder(instance);
+        solution_builder.add_bin(0, 50, CutOrientation::Vertical);
+        solution_builder.add_node(1, 1000);
+        solution_builder.add_node(2, 500);
+        solution_builder.set_last_node_item(0);
+        solution_builder.add_node(2, 1000);
+        solution_builder.set_last_node_item(0);
+        Solution solution = solution_builder.build();
+        EXPECT_TRUE(solution.sets_feasible());
+        EXPECT_TRUE(solution.sets_complete());
+    }
+
+    // Straddle across copies of the SAME replicated bin: one item per
+    // plate, pair completes on the next plate — legal, needs replay.
+    {
+        SolutionBuilder solution_builder(instance);
+        solution_builder.add_bin(0, 2, CutOrientation::Vertical);
+        solution_builder.add_node(1, 1000);
+        solution_builder.add_node(2, 500);
+        solution_builder.set_last_node_item(0);
+        Solution solution = solution_builder.build();
+        EXPECT_TRUE(solution.sets_feasible());
+        EXPECT_TRUE(solution.sets_complete());
+    }
+
+    // Violating pattern (A then B of the same set) — caught on the
+    // first replayed plate.
+    {
+        SolutionBuilder solution_builder(instance);
+        solution_builder.add_bin(0, 10, CutOrientation::Vertical);
+        solution_builder.add_node(1, 1000);
+        solution_builder.add_node(2, 500);
+        solution_builder.set_last_node_item(0);
+        solution_builder.add_node(1, 1600);
+        solution_builder.add_node(2, 400);
+        solution_builder.set_last_node_item(1);
+        Solution solution = solution_builder.build();
+        EXPECT_FALSE(solution.sets_feasible());
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////

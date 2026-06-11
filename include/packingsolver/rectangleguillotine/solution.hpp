@@ -63,7 +63,9 @@ public:
     Solution(const Instance& instance):
         instance_(&instance),
         bin_copies_(instance.number_of_bin_types(), 0),
-        item_copies_(instance.number_of_item_types(), 0)
+        item_copies_(instance.number_of_item_types(), 0),
+        set_active_item_type_(instance.number_of_sets(), -1),
+        set_active_run_count_(instance.number_of_sets(), 0)
     { }
 
     void append(
@@ -100,6 +102,24 @@ public:
     bool maximum_number_2_cuts_feasible() const { return maximum_number_2_cuts_feasible_; }
 
     bool stacks_feasible() const { return stacks_feasible_; }
+
+    /**
+     * Feasibility for the sets (laminated-twin consecutive cutting).
+     *
+     * 'false' iff an item of a set was placed, in physical cut order,
+     * while another row of the same set was mid-sub-group. Trailing
+     * incomplete sub-groups do NOT flip this flag (bins are appended
+     * incrementally and a legally straddling sub-group would
+     * transiently look incomplete) — strict end-state completeness is
+     * exposed separately via sets_complete().
+     */
+    bool sets_feasible() const { return sets_feasible_; }
+
+    /**
+     * Return 'true' iff every set item type's placed copies are a
+     * multiple of its set_size (no sub-group left incomplete).
+     */
+    bool sets_complete() const;
 
     bool defects_feasible() const { return defects_feasible_; }
 
@@ -239,6 +259,9 @@ private:
     /** Feasibility for the stacks. */
     bool stacks_feasible_ = true;
 
+    /** Feasibility for the sets. */
+    bool sets_feasible_ = true;
+
     /** Feasibility for the defect intersections. */
     bool defects_feasible_ = true;
 
@@ -273,6 +296,21 @@ private:
 
     /** Number of copies of each item type in the solution. */
     std::vector<ItemPos> item_copies_;
+
+    /*
+     * Private attributes: sets check state
+     *
+     * Persisted across update_indicators() calls — bins are appended
+     * strictly in order and sub-groups may legally straddle bins.
+     * Indexed by DENSE set id (instance().set_id_of_stack()), not by
+     * the original (possibly sparse) ItemType::set_id.
+     */
+
+    /** Item type currently mid-sub-group per set (-1 if none). */
+    std::vector<ItemTypeId> set_active_item_type_;
+
+    /** Copies of that item type in the current sub-group so far. */
+    std::vector<ItemPos> set_active_run_count_;
 
     /** Total area of the items of the solution. */
     Area item_area_ = 0;

@@ -244,6 +244,67 @@ void Solution::update_indicators(
             }
         }
     }
+
+    // Check sets: replay the bin's item nodes in physical cut order
+    // (a bin with copies k is k sequential plates — deliberately
+    // different from the simultaneous-copies semantics of the stacks
+    // check above). State persists across bins because sub-groups may
+    // legally straddle bin boundaries. Trailing-incomplete runs do NOT
+    // flip feasible_ — bins arrive incrementally and a straddling
+    // sub-group would transiently look incomplete; strict end-state is
+    // exposed via sets_complete(). Flags only — no exit(1).
+    if (instance().has_sets()) {
+        bool all_idle_before = true;
+        for (SetId sid = 0; sid < instance().number_of_sets(); ++sid)
+            if (set_active_item_type_[sid] != -1)
+                all_idle_before = false;
+        for (BinPos copy = 0; copy < bin.copies; ++copy) {
+            bool violation_in_pass = false;
+            for (const SolutionNode& node: bin.nodes) {
+                if (node.d < 1 || node.item_type_id < 0)
+                    continue;
+                const ItemType& item_type
+                        = instance().item_type(node.item_type_id);
+                if (item_type.set_id < 0)
+                    continue;
+                // ItemType::set_id keeps the original (possibly
+                // sparse) CSV value; the dense id lives on the stack.
+                SetId sid = instance().set_id_of_stack(item_type.stack_id);
+                if (set_active_item_type_[sid] != -1
+                        && set_active_item_type_[sid] != node.item_type_id) {
+                    // Another row of the same set is mid-sub-group.
+                    sets_feasible_ = false;
+                    feasible_ = false;
+                    violation_in_pass = true;
+                    // Resync on the new row so later checks stay
+                    // meaningful.
+                    set_active_item_type_[sid] = -1;
+                    set_active_run_count_[sid] = 0;
+                }
+                if (set_active_item_type_[sid] == -1) {
+                    set_active_item_type_[sid] = node.item_type_id;
+                    set_active_run_count_[sid] = 0;
+                }
+                set_active_run_count_[sid]++;
+                if (set_active_run_count_[sid] >= item_type.set_size) {
+                    set_active_item_type_[sid] = -1;
+                    set_active_run_count_[sid] = 0;
+                }
+            }
+            // Fast path: if no set was mid-run when the bin started
+            // and the first pass ends idle without violation, the
+            // remaining copies replay identically — skip them.
+            if (copy == 0 && all_idle_before && !violation_in_pass) {
+                bool all_idle_after = true;
+                for (SetId sid = 0; sid < instance().number_of_sets(); ++sid)
+                    if (set_active_item_type_[sid] != -1)
+                        all_idle_after = false;
+                if (all_idle_after)
+                    break;
+            }
+        }
+    }
+
     if (!minimum_waste_length_feasible()) {
         for (const SolutionNode& node: bin.nodes) {
             std::cout << node << std::endl;
@@ -251,6 +312,20 @@ void Solution::update_indicators(
         write("solution_rectangleguillotine.csv");
         exit(1);
     }
+}
+
+bool Solution::sets_complete() const
+{
+    for (ItemTypeId item_type_id = 0;
+            item_type_id < instance().number_of_item_types();
+            ++item_type_id) {
+        const ItemType& item_type = instance().item_type(item_type_id);
+        if (item_type.set_id < 0)
+            continue;
+        if (item_copies_[item_type_id] % item_type.set_size != 0)
+            return false;
+    }
+    return true;
 }
 
 void Solution::append(

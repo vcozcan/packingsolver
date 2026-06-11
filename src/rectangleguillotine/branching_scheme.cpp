@@ -1836,6 +1836,10 @@ Solution BranchingScheme::to_solution(
         throw std::logic_error(
                 FUNC_SIGNATURE + ": solution doesn't satisfy stacks.");
     }
+    if (!solution.sets_feasible()) {
+        throw std::logic_error(
+                FUNC_SIGNATURE + ": solution doesn't satisfy sets.");
+    }
     if (!solution.defects_feasible()) {
         throw std::logic_error(
                 FUNC_SIGNATURE + ": solution doesn't satisfy defects.");
