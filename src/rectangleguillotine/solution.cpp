@@ -3,6 +3,7 @@
 #include "optimizationtools/utils/utils.hpp"
 
 #include <fstream>
+#include <map>
 
 using namespace packingsolver;
 using namespace packingsolver::rectangleguillotine;
@@ -244,6 +245,76 @@ void Solution::update_indicators(
             }
         }
     }
+
+    // Check sets: replay the bin's item nodes in physical cut order
+    // (a bin with copies k is k sequential plates — deliberately
+    // different from the simultaneous-copies semantics of the stacks
+    // check above). State persists across bins because sub-groups may
+    // legally straddle bin boundaries. Trailing-incomplete runs do NOT
+    // flip feasible_ — bins arrive incrementally and a straddling
+    // sub-group would transiently look incomplete; strict end-state is
+    // exposed via sets_complete(). Flags only — no exit(1).
+    if (instance().has_sets()) {
+        // Each replay pass is a deterministic function of the entering
+        // per-set state (violations included — the resync keeps the
+        // evolution deterministic), so once an entering state repeats,
+        // the remaining passes replicate already-checked behavior with
+        // a fixed period. Jump straight to the final entering state:
+        // this keeps high-copy pattern bins O(nodes x distinct states)
+        // and subsumes the idle-in/idle-out case (period 1). The
+        // canonical mid-run pattern (odd count of one row straddling
+        // into the next plate) has period 2, which a plain fixed-point
+        // check would miss.
+        std::vector<std::vector<ActiveSetState>> entering_states;
+        // Indexed lookup: a linear scan over prior passes would be
+        // quadratic in bin.copies when the composite state period is
+        // large (co-prime per-set periods compound via their LCM and
+        // can exceed bin.copies, so no cycle ever fires).
+        std::map<std::vector<ActiveSetState>, BinPos> entering_state_to_pass;
+        for (BinPos copy = 0; copy < bin.copies; ++copy) {
+            auto cycle_it = entering_state_to_pass.find(set_active_states_);
+            if (cycle_it != entering_state_to_pass.end()) {
+                BinPos cycle_start = cycle_it->second;
+                BinPos period = copy - cycle_start;
+                BinPos final_pass = cycle_start
+                    + (bin.copies - cycle_start) % period;
+                set_active_states_ = entering_states[final_pass];
+                break;
+            }
+            entering_state_to_pass.emplace(set_active_states_, copy);
+            entering_states.push_back(set_active_states_);
+            for (const SolutionNode& node: bin.nodes) {
+                if (node.d < 1 || node.item_type_id < 0)
+                    continue;
+                const ItemType& item_type
+                        = instance().item_type(node.item_type_id);
+                if (item_type.set_id < 0)
+                    continue;
+                // ItemType::set_id keeps the original (possibly
+                // sparse) CSV value; the dense id lives on the stack.
+                SetId sid = instance().set_id_of_stack(item_type.stack_id);
+                ActiveSetState& state = set_active_states_[sid];
+                if (state.item_type_id != -1
+                        && state.item_type_id != node.item_type_id) {
+                    // Another row of the same set is mid-sub-group.
+                    sets_feasible_ = false;
+                    feasible_ = false;
+                    // Resync on the new row so later checks stay
+                    // meaningful.
+                    state = ActiveSetState();
+                }
+                if (state.item_type_id == -1) {
+                    state.item_type_id = node.item_type_id;
+                    state.run_count = 0;
+                }
+                state.run_count++;
+                if (state.run_count >= item_type.set_size) {
+                    state = ActiveSetState();
+                }
+            }
+        }
+    }
+
     if (!minimum_waste_length_feasible()) {
         for (const SolutionNode& node: bin.nodes) {
             std::cout << node << std::endl;
@@ -251,6 +322,20 @@ void Solution::update_indicators(
         write("solution_rectangleguillotine.csv");
         exit(1);
     }
+}
+
+bool Solution::sets_complete() const
+{
+    for (ItemTypeId item_type_id = 0;
+            item_type_id < instance().number_of_item_types();
+            ++item_type_id) {
+        const ItemType& item_type = instance().item_type(item_type_id);
+        if (item_type.set_id < 0)
+            continue;
+        if (item_copies_[item_type_id] % item_type.set_size != 0)
+            return false;
+    }
+    return true;
 }
 
 void Solution::append(

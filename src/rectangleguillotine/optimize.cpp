@@ -279,6 +279,15 @@ void optimize_sequential_value_correction(
         const OptimizeParameters& parameters,
         AlgorithmFormatter& algorithm_formatter)
 {
+    // For set instances, SVC's sets-safety rests on this subproblem:
+    // the KP subinstance is built through the internal copy overload
+    // (set metadata propagated, remaining copies a multiple of
+    // set_size), and the inner tree search only retains
+    // sub-group-complete patterns (Knapsack better() rule). SVC then
+    // stamps the pattern a whole number of times, so completeness
+    // survives replication and the BPPL last-bin copies division
+    // stays exact. Weakening the better() rule would surface as a
+    // mid-solve invalid_argument from build()'s divisibility check.
     SequentialValueCorrectionFunction<Instance, Solution> kp_solve
         = [&algorithm_formatter, &parameters](const Instance& kp_instance)
         {
@@ -591,29 +600,103 @@ packingsolver::rectangleguillotine::Output packingsolver::rectangleguillotine::o
         }
     }
 
-    // Sets are only supported by tree search.  SVC, CG, SSK, and DS
-    // create subinstances via add_item_type(ItemType, profit, copies)
-    // which does not carry set metadata, and the cross-bin active-row
-    // state is lost between subproblems.
+    // Sets: per-algorithm gate.
+    //
+    // The internal add_item_type copy overload propagates set metadata,
+    // the Solution sets checker re-validates emitted certificates, and
+    // the Knapsack sub-group-complete acceptance rule keeps SSK/SVC
+    // single-bin patterns from cutting a sub-group in half — together
+    // these make SSK, SVC and DS sets-safe for the fullness objectives
+    // (bin packing, bin packing with leftovers, variable-sized bin
+    // packing). Column generation remains unsupported: its pricing loop
+    // has no per-pattern completeness rule and needs a separate LDS
+    // audit before enablement. The checks below read the raw
+    // parameters.use_* flags, not the local copies, because the
+    // objective-specific blocks above may already have zeroed locals.
     if (instance.has_sets()) {
-        // Reject explicitly requested incompatible algorithms.
-        if (parameters.use_column_generation_2
-                || parameters.use_sequential_single_knapsack
-                || parameters.use_sequential_value_correction
-                || parameters.use_dichotomic_search
-                || parameters.use_column_generation) {
-            throw std::invalid_argument(
-                    "Set instances only support tree search. "
-                    "Remove explicit algorithm selection flags "
-                    "(column generation, sequential value correction, "
-                    "sequential single knapsack, dichotomic search).");
+        bool fullness_objective
+            = instance.objective() == Objective::BinPacking
+            || instance.objective() == Objective::BinPackingWithLeftovers
+            || instance.objective() == Objective::VariableSizedBinPacking;
+        if (parameters.use_column_generation
+                || parameters.use_column_generation_2) {
+            // Only recommend algorithms the current objective accepts;
+            // under Knapsack and other out-of-scope objectives,
+            // SSK/SVC/DS would just hit the throw below.
+            if (fullness_objective) {
+                throw std::invalid_argument(
+                        "Set instances do not support column generation. "
+                        "Use tree search, sequential single knapsack, "
+                        "sequential value correction, or (for variable-sized "
+                        "bin packing) dichotomic search.");
+            } else {
+                throw std::invalid_argument(
+                        "Set instances do not support column generation. "
+                        "Use tree search for this objective.");
+            }
         }
-        use_tree_search = true;
-        use_column_generation_2 = false;
-        use_sequential_single_knapsack = false;
-        use_sequential_value_correction = false;
-        use_dichotomic_search = false;
-        use_column_generation = false;
+        if (fullness_objective) {
+            // SSK, SVC and DS allowed. Explicit DS under (V)BPP(L)
+            // follows the same silent pass-through as non-set
+            // instances (zeroed or converted by the blocks above).
+            // Exclude column generation from auto-selected pools.
+            use_column_generation = false;
+            use_column_generation_2 = false;
+            // SSK/SVC patterns are single-bin, so a sub-group whose
+            // set_size copies do not fit together within one bin
+            // pattern can never be placed by them (the Knapsack
+            // acceptance rule refuses to split it across patterns).
+            // Keep a straddling-capable algorithm in the pool unless
+            // the user explicitly chose SSK/SVC: tree search straddles
+            // bins, and for multi-bin-type variable-sized bin packing
+            // (where tree search is unavailable) dichotomic search
+            // covers it — its probes solve full bin-packing
+            // subinstances with use_tree_search forced.
+            if (!use_tree_search
+                    && !use_dichotomic_search
+                    && !parameters.use_sequential_single_knapsack
+                    && !parameters.use_sequential_value_correction) {
+                if (instance.objective() == Objective::VariableSizedBinPacking
+                        && instance.number_of_bin_types() > 1) {
+                    use_dichotomic_search = true;
+                } else {
+                    use_tree_search = true;
+                }
+            }
+            // Defensive fallback — never leave the pool empty
+            // (unreachable today: auto-selection always pairs CG with
+            // SVC, never alone).
+            if (!use_tree_search
+                    && !use_sequential_single_knapsack
+                    && !use_sequential_value_correction
+                    && !use_dichotomic_search) {
+                if (instance.objective() == Objective::VariableSizedBinPacking
+                        && instance.number_of_bin_types() > 1) {
+                    use_sequential_value_correction = true;
+                } else {
+                    use_tree_search = true;
+                }
+            }
+        } else {
+            // Knapsack and other objectives: tree search only.
+            if (parameters.use_sequential_single_knapsack
+                    || parameters.use_sequential_value_correction
+                    || parameters.use_dichotomic_search) {
+                throw std::invalid_argument(
+                        "Set instances only support tree search under "
+                        "this objective. Sequential single knapsack, "
+                        "sequential value correction and dichotomic "
+                        "search are allowed for sets only with bin "
+                        "packing, bin packing with leftovers, or "
+                        "variable-sized bin packing.");
+            }
+            use_tree_search = true;
+            use_column_generation_2 = false;
+            use_sequential_single_knapsack = false;
+            use_sequential_value_correction = false;
+            use_dichotomic_search = false;
+            use_column_generation = false;
+        }
     }
 
     if (instance.objective() == Objective::BinPacking) {

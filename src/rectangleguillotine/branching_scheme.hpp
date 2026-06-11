@@ -389,6 +389,15 @@ private:
      */
     std::vector<StackId> stack_pred_;
 
+    /**
+     * Stacks belonging to a set (empty iff !instance_.has_sets()).
+     *
+     * Used by sets_complete(): under Objective::Knapsack, better() only
+     * accepts nodes whose every set row is sub-group-complete, so
+     * SVC/SSK single-bin patterns never cut a sub-group in half.
+     */
+    std::vector<StackId> set_stack_list_;
+
     /*
      * JSON search tree attributes
      */
@@ -437,6 +446,22 @@ private:
     bool dominates(const Front& f1, const Front& f2) const;
 
     inline bool full(const Node& node) const { return node.number_of_items == instance_.number_of_items(); }
+
+    /**
+     * Return 'true' iff every set row of 'node' is sub-group-complete
+     * (pos_stack multiple of the set_size).
+     *
+     * Uses instance_ (original) like the children() set filter — stack
+     * indices and set metadata are invariant under flipping.
+     */
+    inline bool sets_complete(const Node& node) const
+    {
+        for (StackId s: set_stack_list_) {
+            if (node.pos_stack[s] % instance_.set_size_of_stack(s) != 0)
+                return false;
+        }
+        return true;
+    }
 
     /** Get the width of a node. */
     inline Length width(const Node& node) const { return (instance_.parameters().number_of_stages == 3)? node.x1_curr: node.y2_curr; }

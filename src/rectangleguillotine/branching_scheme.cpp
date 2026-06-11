@@ -90,6 +90,11 @@ BranchingScheme::BranchingScheme(
                 }
             }
         }
+
+        // Stacks belonging to a set, for sets_complete().
+        for (StackId s = 0; s < instance.number_of_stacks(); ++s)
+            if (instance.set_id_of_stack(s) != -1)
+                set_stack_list_.push_back(s);
     }
 }
 
@@ -192,6 +197,11 @@ bool BranchingScheme::better(
 {
     switch (instance().objective()) {
     case Objective::Default: {
+        // Same sets guard as the Knapsack case below (defensive; the
+        // Default objective is profit-driven and may stop short of a
+        // full placement too).
+        if (!set_stack_list_.empty() && !sets_complete(*node_1))
+            return false;
         if (node_2->profit > node_1->profit)
             return false;
         if (node_2->profit < node_1->profit)
@@ -224,6 +234,19 @@ bool BranchingScheme::better(
             return true;
         return height(*node_2) > height(*node_1);
     } case Objective::Knapsack: {
+        // Sets: only accept sub-group-complete nodes into the solution
+        // pool. Queue admission goes through leaf()/bound(), not
+        // better(), so mid-sub-group nodes remain explorable — they
+        // just cannot be retained as a result. This is what keeps
+        // SVC/SSK single-bin patterns from cutting a sub-group in half
+        // (the divisibility of the remaining copies depends on it).
+        // The rule is keyed on the objective, not on "this is a
+        // subproblem": SSK/SVC/DS all solve their inner problems under
+        // Knapsack or BinPacking (full placement) today. A future
+        // outer algorithm using a different inner objective must
+        // extend this rule or half-sub-groups would be retained.
+        if (!set_stack_list_.empty() && !sets_complete(*node_1))
+            return false;
         return node_2->profit < node_1->profit;
     } default: {
         std::stringstream ss;
@@ -1832,9 +1855,30 @@ Solution BranchingScheme::to_solution(
         throw std::logic_error(
                 FUNC_SIGNATURE + ": solution doesn't satisfy maximum number of 2-cuts.");
     }
-    if (!solution.stacks_feasible()) {
-        throw std::logic_error(
-                FUNC_SIGNATURE + ": solution doesn't satisfy stacks.");
+    // Stacks and sets are cross-bin logical invariants; a last-bin-only
+    // reconstruction (json_export, --json-search-tree) legally starts
+    // mid-stack or mid-sub-group, so only full reconstructions are
+    // checked. The per-bin geometric checks stay unconditional.
+    if (!only_last_bin) {
+        if (!solution.stacks_feasible()) {
+            throw std::logic_error(
+                    FUNC_SIGNATURE + ": solution doesn't satisfy stacks.");
+        }
+        if (!solution.sets_feasible()) {
+            throw std::logic_error(
+                    FUNC_SIGNATURE + ": solution doesn't satisfy sets.");
+        }
+        // Strict end-state: update_indicators() deliberately leaves
+        // trailing-incomplete sub-groups feasible (bins arrive
+        // incrementally), but a fully reconstructed certificate must
+        // not end mid-sub-group. Unreachable today — better() accepts
+        // only sets-complete nodes (Knapsack/Default guard, leaf() for
+        // fullness objectives) — so this catches a future regression
+        // of that rule rather than any current behavior.
+        if (!solution.sets_complete()) {
+            throw std::logic_error(
+                    FUNC_SIGNATURE + ": solution doesn't satisfy sets completeness.");
+        }
     }
     if (!solution.defects_feasible()) {
         throw std::logic_error(

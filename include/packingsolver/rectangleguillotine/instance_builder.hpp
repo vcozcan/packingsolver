@@ -2,6 +2,8 @@
 
 #include "packingsolver/rectangleguillotine/instance.hpp"
 
+#include <unordered_set>
+
 namespace packingsolver
 {
 namespace rectangleguillotine
@@ -170,7 +172,12 @@ public:
     /**
      * Add an item type from another item type.
      *
-     * This method is used in the column generation procedure.
+     * This method is used when algorithms (SVC, CG, dichotomic search) and
+     * the InstanceFlipper build subinstances from an already-built instance.
+     * It propagates set metadata and keeps the materialized stack_id
+     * unchanged so that stack indices remain invariant between the original
+     * and the copy; the copied items are exempted from the set/stack
+     * mutual-exclusion check in build() (which targets user input).
      */
     void add_item_type(
             const ItemType& item_type,
@@ -227,6 +234,17 @@ private:
 
     /** Instance. */
     Instance instance_;
+
+    /**
+     * Item types added through the internal copy overload
+     * add_item_type(const ItemType&, Profit, ItemPos).
+     *
+     * These are exempt from the set/stack mutual-exclusion check in
+     * build(): a set item copied from a built instance legitimately
+     * carries the singleton stack_id that build() itself materialized.
+     * User input paths never register here.
+     */
+    std::unordered_set<ItemTypeId> internal_copy_item_type_ids_;
 
 };
 

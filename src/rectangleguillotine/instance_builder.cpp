@@ -458,21 +458,33 @@ ItemTypeId InstanceBuilder::add_item_type(
     return instance_.item_types_.size() - 1;
 }
 
-// Note: this overload does not propagate set_id / set_size.
-// This is intentional — callers (SVC, CG, InstanceFlipper) are
-// disabled for set instances via the tree-search-only guard.
+// Internal copy overload: propagates set metadata and keeps stack_id
+// unchanged.  Resetting set items' stack_id to -1 here would be wrong:
+// non-set items keep their materialized ids, so build() would re-append
+// the set items after all explicit stacks, changing stack indices and
+// stack count relative to the source instance.  The branching scheme
+// reads set metadata from the original instance while pos_stack is
+// indexed by the (possibly flipped) copy — that index invariance is
+// load-bearing.
 void InstanceBuilder::add_item_type(
         const ItemType& item_type,
         Profit profit,
         ItemPos copies)
 {
-    add_item_type(
+    ItemTypeId item_type_id = add_item_type(
             item_type.rect.w,
             item_type.rect.h,
             profit,
             copies,
             item_type.oriented,
             item_type.stack_id);
+    if (item_type.set_id >= 0) {
+        set_last_item_type_set(item_type.set_id, item_type.set_size);
+        // A set item copied from a built instance carries the singleton
+        // stack_id that build() materialized; exempt it from the
+        // user-input mutual-exclusion check in build().
+        internal_copy_item_type_ids_.insert(item_type_id);
+    }
 }
 
 void InstanceBuilder::set_last_item_type_set(SetId set_id, ItemPos set_size)
@@ -887,6 +899,22 @@ void InstanceBuilder::read_item_types(
 Instance InstanceBuilder::build()
 {
     // --- Sets: validate ---
+    // The exemption registry cannot prove provenance (the copy overload
+    // is public), but the shape that makes the exemption safe can be
+    // checked: build() only ever materializes set items into singleton
+    // stacks, so a legitimately copied set item is the only item type
+    // on its stack. A shared stack marks a hand-built ItemType whose
+    // set metadata would overwrite the foreign stack's state.
+    std::map<StackId, ItemPos> item_types_per_explicit_stack;
+    if (!internal_copy_item_type_ids_.empty()) {
+        for (ItemTypeId item_type_id = 0;
+                item_type_id < instance_.number_of_item_types();
+                ++item_type_id) {
+            StackId stack_id = instance_.item_type(item_type_id).stack_id;
+            if (stack_id >= 0)
+                item_types_per_explicit_stack[stack_id]++;
+        }
+    }
     bool has_any_set = false;
     for (ItemTypeId item_type_id = 0;
             item_type_id < instance_.number_of_item_types();
@@ -894,11 +922,25 @@ Instance InstanceBuilder::build()
         const ItemType& item_type = instance_.item_type(item_type_id);
         if (item_type.set_id != -1) has_any_set = true;
         // V10: per-item mutual exclusion (defense-in-depth).
+        // Items registered by the internal copy overload are exempt:
+        // their stack_id is the singleton stack a previous build()
+        // materialized, not user input.
         if (item_type.set_id >= 0 && item_type.stack_id >= 0) {
-            throw std::invalid_argument(
-                    "item type " + std::to_string(item_type_id)
-                    + " has both SET_ID and explicit STACK_ID."
-                    " They are mutually exclusive on the same item.");
+            if (internal_copy_item_type_ids_.count(item_type_id) == 0) {
+                throw std::invalid_argument(
+                        "item type " + std::to_string(item_type_id)
+                        + " has both SET_ID and explicit STACK_ID."
+                        " They are mutually exclusive on the same item.");
+            }
+            if (item_types_per_explicit_stack[item_type.stack_id] > 1) {
+                throw std::invalid_argument(
+                        "item type " + std::to_string(item_type_id)
+                        + " has SET_ID and shares STACK_ID "
+                        + std::to_string(item_type.stack_id)
+                        + " with another item type."
+                        " A copied set item must keep the singleton stack"
+                        " materialized by build().");
+            }
         }
     }
 
@@ -1100,5 +1142,10 @@ Instance InstanceBuilder::build()
                 "an instance with objective OpenDimensionY must contain exactly one bin.");
     }
 
-    return std::move(instance_);
+    // The exemption registry is keyed by item type id; a reused builder
+    // restarts ids at 0, so stale entries could let user-input items
+    // bypass the mutual-exclusion check on a later build.
+    Instance out = std::move(instance_);
+    internal_copy_item_type_ids_.clear();
+    return out;
 }

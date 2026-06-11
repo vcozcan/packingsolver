@@ -126,36 +126,79 @@ For set instances, a two-pass post-processing step runs after the standard
 No changes to `Node` or `NodeHasher` were needed. Set state is fully derivable
 from the existing `pos_stack[s]` values using `pos_stack[s] % SET_SIZE`.
 
-### InstanceFlipper
+### Internal subinstance copies (SVC, SSK, DS, CG, InstanceFlipper)
 
-The `InstanceFlipper` (used for trying both horizontal and vertical first-cut
-orientations) is safe for sets. The branching scheme queries `instance_`
-(the original, unflipped instance) for all set metadata. Stack indices, sizes,
-and set metadata are invariant under flipping.
+The `add_item_type(const ItemType&, Profit, ItemPos)` overload — used by the
+subproblem algorithms and the `InstanceFlipper` — propagates `set_id` /
+`set_size` and keeps the materialized `stack_id` unchanged, so the copied
+instance has an **identical stack structure** to the source. This matters
+because the branching scheme reads set metadata from `instance_` (the
+original) while `pos_stack` is indexed by the possibly-flipped instance —
+stack-index invariance between the two is load-bearing.
+
+Copied set items legitimately carry both `set_id` and a (materialized)
+`stack_id`; they are exempted from the user-input mutual-exclusion check via a
+builder-private registry (`internal_copy_item_type_ids_`). User input paths
+still throw. The exemption is shape-checked rather than blindly trusted: the
+overload is public, so `build()` additionally requires every exempted set item
+to be the only item type on its stack (the only shape a previous `build()` can
+produce) — a hand-built `ItemType` sharing another item's stack throws instead
+of stamping set metadata onto the foreign stack.
+
+### Solution-level companion checker
+
+`Solution::update_indicators()` re-validates the sets invariant on every
+emitted bin (mirroring the existing stacks check): bins are replayed
+`copies` times sequentially (physical cut order), per-set run state persists
+across bins (sub-groups may straddle), and a violation sets
+`sets_feasible() == false` / `feasible() == false`. Trailing-incomplete
+sub-groups do **not** flip feasibility (bins arrive incrementally); strict
+end-state completeness is exposed via `Solution::sets_complete()`.
+`BranchingScheme::to_solution()` throws if its own solution fails this check.
+
+### Knapsack acceptance rule
+
+Under `Objective::Knapsack` (the inner objective of SSK/SVC patterns),
+`BranchingScheme::better()` only retains nodes whose every set row is
+sub-group-complete (`pos_stack[s] % set_size == 0`). Queue admission goes
+through `leaf()`/`bound()`, not `better()`, so mid-sub-group nodes remain
+explorable — they just cannot be returned as a result. This keeps single-bin
+patterns from cutting a sub-group in half and preserves the divisibility of
+remaining copies when SVC rebuilds its subinstance.
 
 ## Algorithm Restrictions
 
-### Tree search only
+Support is **per objective**:
 
-Set instances **only support tree search**. The following algorithms are
-incompatible and cannot be used:
-
-- Column Generation (CG)
-- Column Generation 2 (CG2)
-- Sequential Value Correction (SVC)
-- Sequential Single Knapsack (SSK)
-- Dichotomic Search (DS)
-
-**Why:** These algorithms create subinstances via `add_item_type(const
-ItemType&, profit, copies)`, which does not propagate `set_id` or `set_size`.
-Additionally, the cross-bin active-row state is lost between subproblems.
+| Objective | Tree Search | SSK | SVC | DS | CG / CG2 |
+|-----------|-------------|-----|-----|----|----------|
+| BinPacking / BinPackingWithLeftovers | yes | yes | yes | n/a (zeroed upstream for all instances) | no |
+| VariableSizedBinPacking | yes (single bin type) | yes | yes | yes | no |
+| Knapsack / other | yes (forced) | no | no | no | no |
 
 **Behavior:**
-- If the user **explicitly requests** an incompatible algorithm (e.g.,
-  `--use-sequential-value-correction`), the solver throws
-  `std::invalid_argument`.
-- If the auto-selection logic would choose an incompatible algorithm, it is
-  silently overridden to tree search.
+- Explicit `--use-column-generation` / `--use-column-generation-2` on a set
+  instance throws `std::invalid_argument` under every objective (the pricing
+  loop has no per-pattern completeness rule; needs a separate LDS audit).
+- Under Knapsack and other out-of-scope objectives, explicit SSK/SVC/DS
+  throws and auto-selection is overridden to tree search.
+- Under the fullness objectives, auto-selection simply excludes CG/CG2 from
+  the pool; SSK/SVC/DS run as selected.
+- The gate reads the raw requested flags, so an explicit incompatible request
+  is rejected even when an upstream normalization (e.g. the single-bin
+  branch) already cleared the local flag.
+- Automatic pools always retain a straddling-capable algorithm: when the
+  resolved pool contains neither tree search nor dichotomic search and the
+  user did not explicitly choose SSK/SVC, the gate adds tree search (or
+  dichotomic search for multi-bin-type VBPP, whose probes are
+  tree-search-backed). Without this, the many-copies auto-selection branches
+  (SSK-only or SVC+CG) would leave a feasible instance with an oversized
+  sub-group unplaced.
+
+**Structural note (accepted):** a sub-group that cannot complete within one
+bin pattern can never be packed by SSK/SVC (tree search can straddle bins).
+This yields a partial solution, never a violation; an explicit SSK/SVC-only
+selection accepts this floor, automatic selection never hits it (see above).
 
 ### Performance
 
@@ -182,40 +225,61 @@ to catch cases where no item has a valid SET_ID but some have SET_SIZE set.
 
 ## Known Limitations
 
-1. **Tree search only:** Subproblem-based algorithms (SVC, CG, SSK, DS) are
-   incompatible. This limits optimization power for large instances where these
-   algorithms would otherwise outperform tree search.
+1. **Column generation unsupported; Knapsack objective is tree-search-only:**
+   see Algorithm Restrictions above. SSK/SVC additionally cannot pack a
+   sub-group that does not fit within a single bin pattern (tree search can
+   straddle bins) — partial solution, never a violation.
 
 2. **Single-bin limitation with high copy counts:** When using
    `BinPackingWithLeftovers` objective with a single bin and very high copy
    counts (e.g., 120 copies), the `NotAnytimeSequential` mode may fail to
    place any items. Use `Anytime` mode or multiple bins for such cases.
 
-3. **`add_item_type(const ItemType&, profit, copies)` drops set metadata:**
-   This overload (used by internal algorithms) does not propagate `set_id` or
-   `set_size`. This is intentional and guarded by the tree-search-only
-   restriction, but future algorithm development must be aware of this.
-
-4. **`set_last_item_type_set()` coupling:** Must be called immediately after
+3. **`set_last_item_type_set()` coupling:** Must be called immediately after
    `add_item_type()`. There is no validation at the call site — all validation
    is deferred to `build()`.
 
-5. **`set_size_of_stack()` accessor:** Returns -1 for non-set stacks. Callers
+4. **`set_size_of_stack()` accessor:** Returns -1 for non-set stacks. Callers
    must check `set_id_of_stack(s) != -1` before using the return value.
+   This includes the Solution-level checker, which derives dense set ids via
+   `set_id_of_stack(stack_id)` — never index per-set state by the sparse
+   `ItemType::set_id`.
 
 ## Test Coverage
 
-23 automated tests in `test/rectangleguillotine/sets_test.cpp`:
+52 automated tests in `test/rectangleguillotine/sets_test.cpp`:
 
 - **Instance building (6):** basic set, mixed set/non-set, multiple sets,
   sparse SET_IDs, non-set regression, mixed set + explicit stack
 - **Validation (7):** per-item mutual exclusion, copies divisibility, SET_SIZE
   without SET_ID, orphan SET_SIZE, negative SET_ID, missing SET_SIZE, SET_SIZE=0
 - **CSV parsing (3):** basic, mixed, multiple sets
-- **Branching scheme (2):** cross-set stack_pred_ breaking, different-SET_SIZE
-  stack_pred_ breaking
-- **Solve (5):** tree search forcing, incompatible algorithm rejection,
-  single-row set, mixed set/non-set solve, multiple sets solve
+- **Internal copy / flipper (5):** mixed-composition flipper round trip with
+  exact stack-mapping asserts, mutual exclusion still rejected on user input,
+  mutual exclusion still rejected on a reused builder (exemption registry
+  cleared between builds), mutual exclusion still rejected on a hand-built
+  copy sharing another item's stack (exempted set items must keep their
+  materialized singleton stack), sparse-subset copy (SVC's actual path:
+  exhausted row → phantom back-filled stack, indices and set metadata
+  preserved)
+- **Branching scheme (3):** cross-set stack_pred_ breaking, different-SET_SIZE
+  stack_pred_ breaking, Knapsack sub-group-complete acceptance
+- **Solution checker (7):** interleaving detection, cross-bin straddling,
+  lenient trailing, sparse-set-id dense indexing, high-copy bin replay,
+  cycle-skip final-state correctness (period-2 mid-run pattern), late-pass
+  violation (clean first plate, violating second)
+- **Non-TS enablement end-to-end (4):** SSK+BPP, SVC+BPPL (last-bin reopt),
+  SVC+VBPP, DS+VBPP — full placement + certificate oracle
+  (`sets_oracle.hpp`, a port of the analysis harness checker)
+- **Auto-selection (5):** BPP / BPPL / VBPP-multi-bin with no algorithm flags,
+  shaped so the pre-gate pool would have included CG; BPP and
+  VBPP-multi-bin oversized-sub-group regressions pinning that automatic
+  pools retain a straddling-capable algorithm
+- **Stacks regressions (2):** SSK+BPP and SVC+VBPP on stack instances
+- **Gate / solve (10):** tree search forcing, explicit CG / CG2 rejection,
+  objective-aware CG message under Knapsack, Knapsack explicit SVC rejection
+  (multi-bin and single-bin), SVC+BPPL allowed end-to-end, single-row set,
+  mixed set/non-set solve, multiple sets solve
 
 Test data in `data/rectangleguillotine/tests/sets_*/`.
 
@@ -224,8 +288,11 @@ Test data in `data/rectangleguillotine/tests/sets_*/`.
 | File | Changes |
 |------|---------|
 | `instance.hpp` | `SetId` typedef, `set_id`/`set_size` on `ItemType`, set metadata + accessors on `Instance` |
-| `instance_builder.hpp` | `set_last_item_type_set()` declaration |
-| `instance_builder.cpp` | CSV parsing, validation, dense index remapping |
-| `branching_scheme.cpp` | Two-pass `stack_pred_` fix, active-row filter, Roadef2018 guard |
-| `optimize.cpp` | Tree-search-only enforcement with explicit error on incompatible flags |
+| `instance_builder.hpp` | `set_last_item_type_set()` declaration, `internal_copy_item_type_ids_` registry |
+| `instance_builder.cpp` | CSV parsing, validation, dense index remapping, set-propagating internal copy overload |
+| `solution.hpp` / `solution.cpp` | `sets_feasible()` companion checker in `update_indicators()`, `sets_complete()` |
+| `branching_scheme.hpp` | `set_stack_list_`, `sets_complete(Node)` helper |
+| `branching_scheme.cpp` | Two-pass `stack_pred_` fix, active-row filter, Roadef2018 guard, Knapsack acceptance rule, `to_solution()` sets tripwire |
+| `optimize.cpp` | Per-algorithm, per-objective sets gate (CG rejected; SSK/SVC/DS allowed for fullness objectives) |
 | `instance.cpp` | Set-aware `write()`, conditional `format()`, `operator<<` |
+| `test/rectangleguillotine/sets_oracle.hpp` | Certificate-level sets oracle used by the end-to-end tests |
