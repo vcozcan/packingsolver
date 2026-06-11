@@ -1,6 +1,7 @@
 #include "packingsolver/rectangleguillotine/instance_builder.hpp"
 #include "packingsolver/rectangleguillotine/optimize.hpp"
 #include "rectangleguillotine/branching_scheme.hpp"
+#include "rectangleguillotine/instance_flipper.hpp"
 
 #include <gtest/gtest.h>
 #include <boost/filesystem.hpp>
@@ -302,6 +303,81 @@ TEST(RectangleGuillotineSets, CsvMultipleSets)
 
     EXPECT_TRUE(instance.has_sets());
     EXPECT_EQ(instance.number_of_sets(), 2);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+//////////////////////// Internal copy / flipper tests /////////////////////////
+////////////////////////////////////////////////////////////////////////////////
+
+TEST(RectangleGuillotineSets, FlipperRoundTripPropagatesSets)
+{
+    // Mixed composition: set items interleaved with implicit-stack non-set
+    // items and explicit-stack items. The flipped instance must have an
+    // IDENTICAL stack structure (count + per-item-type stack_id) and
+    // identical set metadata — the branching scheme reads set metadata from
+    // the original instance while pos_stack is indexed by the flipped one,
+    // so any divergence means wrong enforcement or out-of-bounds.
+    InstanceBuilder instance_builder;
+    instance_builder.set_objective(Objective::BinPackingWithLeftovers);
+    instance_builder.set_number_of_stages(3);
+    instance_builder.set_cut_type(CutType::NonExact);
+    instance_builder.set_first_stage_orientation(CutOrientation::Horizontal);
+    instance_builder.add_item_type(1000, 500, -1, 4);
+    instance_builder.set_last_item_type_set(7, 2);               // set item
+    instance_builder.add_item_type(900, 450, -1, 2, false, 0);  // explicit stack 0
+    instance_builder.add_item_type(800, 300, -1, 3);             // implicit non-set
+    instance_builder.add_item_type(600, 400, -1, 2);
+    instance_builder.set_last_item_type_set(7, 2);               // set item, same set
+    instance_builder.add_item_type(700, 350, -1, 1, false, 0);  // explicit stack 0
+    instance_builder.add_item_type(500, 250, -1, 3);
+    instance_builder.set_last_item_type_set(50123, 3);           // sparse set id
+    instance_builder.add_bin_type(6000, 3210);
+    Instance instance = instance_builder.build();
+
+    ASSERT_TRUE(instance.has_sets());
+    ASSERT_EQ(instance.number_of_sets(), 2);
+
+    InstanceFlipper flipper(instance);
+    const Instance& flipped = flipper.flipped_instance();
+
+    EXPECT_TRUE(flipped.has_sets());
+    EXPECT_EQ(flipped.number_of_sets(), instance.number_of_sets());
+    ASSERT_EQ(flipped.number_of_stacks(), instance.number_of_stacks());
+    ASSERT_EQ(flipped.number_of_item_types(), instance.number_of_item_types());
+    for (ItemTypeId item_type_id = 0;
+            item_type_id < instance.number_of_item_types();
+            ++item_type_id) {
+        EXPECT_EQ(flipped.item_type(item_type_id).stack_id,
+                  instance.item_type(item_type_id).stack_id);
+        EXPECT_EQ(flipped.item_type(item_type_id).stack_pos,
+                  instance.item_type(item_type_id).stack_pos);
+        EXPECT_EQ(flipped.item_type(item_type_id).set_id,
+                  instance.item_type(item_type_id).set_id);
+        EXPECT_EQ(flipped.item_type(item_type_id).set_size,
+                  instance.item_type(item_type_id).set_size);
+    }
+    for (StackId s = 0; s < instance.number_of_stacks(); ++s) {
+        EXPECT_EQ(flipped.set_id_of_stack(s), instance.set_id_of_stack(s));
+        if (instance.set_id_of_stack(s) != -1) {
+            EXPECT_EQ(flipped.set_size_of_stack(s),
+                      instance.set_size_of_stack(s));
+        }
+    }
+}
+
+TEST(RectangleGuillotineSets, MutualExclusionStillRejectedAfterCopySupport)
+{
+    // The internal-copy exemption must NOT relax the user-input path:
+    // an explicit STACK_ID + SET_ID on the same item still throws.
+    InstanceBuilder instance_builder;
+    instance_builder.set_objective(Objective::BinPackingWithLeftovers);
+    instance_builder.set_number_of_stages(3);
+    instance_builder.set_cut_type(CutType::NonExact);
+    instance_builder.add_item_type(1000, 500, -1, 4, false, 3);
+    instance_builder.set_last_item_type_set(0, 2);
+    instance_builder.add_bin_type(6000, 3210);
+
+    EXPECT_THROW(instance_builder.build(), std::invalid_argument);
 }
 
 ////////////////////////////////////////////////////////////////////////////////

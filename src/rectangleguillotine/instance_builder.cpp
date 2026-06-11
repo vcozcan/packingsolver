@@ -458,21 +458,33 @@ ItemTypeId InstanceBuilder::add_item_type(
     return instance_.item_types_.size() - 1;
 }
 
-// Note: this overload does not propagate set_id / set_size.
-// This is intentional — callers (SVC, CG, InstanceFlipper) are
-// disabled for set instances via the tree-search-only guard.
+// Internal copy overload: propagates set metadata and keeps stack_id
+// unchanged.  Resetting set items' stack_id to -1 here would be wrong:
+// non-set items keep their materialized ids, so build() would re-append
+// the set items after all explicit stacks, changing stack indices and
+// stack count relative to the source instance.  The branching scheme
+// reads set metadata from the original instance while pos_stack is
+// indexed by the (possibly flipped) copy — that index invariance is
+// load-bearing.
 void InstanceBuilder::add_item_type(
         const ItemType& item_type,
         Profit profit,
         ItemPos copies)
 {
-    add_item_type(
+    ItemTypeId item_type_id = add_item_type(
             item_type.rect.w,
             item_type.rect.h,
             profit,
             copies,
             item_type.oriented,
             item_type.stack_id);
+    if (item_type.set_id >= 0) {
+        set_last_item_type_set(item_type.set_id, item_type.set_size);
+        // A set item copied from a built instance carries the singleton
+        // stack_id that build() materialized; exempt it from the
+        // user-input mutual-exclusion check in build().
+        internal_copy_item_type_ids_.insert(item_type_id);
+    }
 }
 
 void InstanceBuilder::set_last_item_type_set(SetId set_id, ItemPos set_size)
@@ -894,7 +906,11 @@ Instance InstanceBuilder::build()
         const ItemType& item_type = instance_.item_type(item_type_id);
         if (item_type.set_id != -1) has_any_set = true;
         // V10: per-item mutual exclusion (defense-in-depth).
-        if (item_type.set_id >= 0 && item_type.stack_id >= 0) {
+        // Items registered by the internal copy overload are exempt:
+        // their stack_id is the singleton stack a previous build()
+        // materialized, not user input.
+        if (item_type.set_id >= 0 && item_type.stack_id >= 0
+                && internal_copy_item_type_ids_.count(item_type_id) == 0) {
             throw std::invalid_argument(
                     "item type " + std::to_string(item_type_id)
                     + " has both SET_ID and explicit STACK_ID."
