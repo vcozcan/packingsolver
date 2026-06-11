@@ -674,10 +674,99 @@ TEST(RectangleGuillotineSets, TreeSearchForcedForSets)
     EXPECT_EQ(output.solution_pool.best().number_of_items(), 8);
 }
 
-TEST(RectangleGuillotineSets, ExplicitIncompatibleAlgorithmRejected)
+TEST(RectangleGuillotineSets, ExplicitSvcAllowedForBpplSets)
+{
+    // SVC + BPPL + sets is now allowed (per-algorithm gate); the run
+    // must complete with a sets-feasible full placement.
+    InstanceBuilder instance_builder;
+    instance_builder.set_objective(Objective::BinPackingWithLeftovers);
+    instance_builder.set_number_of_stages(3);
+    instance_builder.set_cut_type(CutType::NonExact);
+    instance_builder.add_item_type(1000, 500, -1, 4);
+    instance_builder.set_last_item_type_set(0, 2);
+    instance_builder.add_bin_type(6000, 3210);
+    Instance instance = instance_builder.build();
+
+    OptimizeParameters optimize_parameters;
+    optimize_parameters.optimization_mode
+            = packingsolver::OptimizationMode::NotAnytimeSequential;
+    optimize_parameters.use_sequential_value_correction = true;
+    auto output = optimize(instance, optimize_parameters);
+
+    const Solution& best = output.solution_pool.best();
+    EXPECT_EQ(best.number_of_items(), 4);
+    EXPECT_TRUE(best.sets_feasible());
+    EXPECT_TRUE(best.sets_complete());
+}
+
+TEST(RectangleGuillotineSets, ExplicitColumnGenerationRejected)
 {
     InstanceBuilder instance_builder;
     instance_builder.set_objective(Objective::BinPackingWithLeftovers);
+    instance_builder.set_number_of_stages(3);
+    instance_builder.set_cut_type(CutType::NonExact);
+    instance_builder.add_item_type(1000, 500, -1, 4);
+    instance_builder.set_last_item_type_set(0, 2);
+    instance_builder.add_bin_type(6000, 3210);
+    Instance instance = instance_builder.build();
+
+    OptimizeParameters optimize_parameters;
+    optimize_parameters.optimization_mode
+            = packingsolver::OptimizationMode::NotAnytimeSequential;
+    optimize_parameters.use_column_generation = true;
+
+    EXPECT_THROW(optimize(instance, optimize_parameters),
+                 std::invalid_argument);
+}
+
+TEST(RectangleGuillotineSets, ExplicitColumnGeneration2Rejected)
+{
+    InstanceBuilder instance_builder;
+    instance_builder.set_objective(Objective::Knapsack);
+    instance_builder.set_number_of_stages(3);
+    instance_builder.set_cut_type(CutType::NonExact);
+    instance_builder.add_item_type(1000, 500, -1, 4);
+    instance_builder.set_last_item_type_set(0, 2);
+    instance_builder.add_bin_type(6000, 3210);
+    Instance instance = instance_builder.build();
+
+    OptimizeParameters optimize_parameters;
+    optimize_parameters.optimization_mode
+            = packingsolver::OptimizationMode::NotAnytimeSequential;
+    optimize_parameters.use_column_generation_2 = true;
+
+    EXPECT_THROW(optimize(instance, optimize_parameters),
+                 std::invalid_argument);
+}
+
+TEST(RectangleGuillotineSets, KnapsackExplicitSvcStillRejected)
+{
+    // The Knapsack OUTER objective stays tree-search-only for sets.
+    InstanceBuilder instance_builder;
+    instance_builder.set_objective(Objective::Knapsack);
+    instance_builder.set_number_of_stages(3);
+    instance_builder.set_cut_type(CutType::NonExact);
+    instance_builder.add_item_type(1000, 500, -1, 4);
+    instance_builder.set_last_item_type_set(0, 2);
+    instance_builder.add_bin_type(6000, 3210, -1, 2);
+    Instance instance = instance_builder.build();
+
+    OptimizeParameters optimize_parameters;
+    optimize_parameters.optimization_mode
+            = packingsolver::OptimizationMode::NotAnytimeSequential;
+    optimize_parameters.use_sequential_value_correction = true;
+
+    EXPECT_THROW(optimize(instance, optimize_parameters),
+                 std::invalid_argument);
+}
+
+TEST(RectangleGuillotineSets, SingleBinKnapsackExplicitSvcStillRejected)
+{
+    // Single-bin instances zero the LOCAL svc flag before the gate
+    // runs; the gate must read parameters.use_* (the raw request) and
+    // still throw for Knapsack + sets.
+    InstanceBuilder instance_builder;
+    instance_builder.set_objective(Objective::Knapsack);
     instance_builder.set_number_of_stages(3);
     instance_builder.set_cut_type(CutType::NonExact);
     instance_builder.add_item_type(1000, 500, -1, 4);
