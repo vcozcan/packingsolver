@@ -3,6 +3,7 @@
 #include "packingsolver/rectangleguillotine/instance.hpp"
 
 #include <unordered_set>
+#include <functional>
 
 namespace packingsolver
 {
@@ -232,6 +233,28 @@ private:
 
     /** Compute bin types area max. */
     Area compute_bin_types_area_max() const;
+
+    /**
+     * Build a dense, first-appearance remap of a per-item-type grouping
+     * key (SET_ID or BUDDY_ID) and populate the per-stack id array and the
+     * per-group stack buckets. Shared by the sets and buddies blocks of
+     * build().
+     *
+     * - key_of(item_type): the original group key, or -1 if the item type
+     *   does not participate in this axis.
+     * - id_per_stack[s]: set to the dense group id of stack s (-1 if none).
+     * - stacks[g]: filled with the stacks of dense group g.
+     * - dense_to_original[g]: the first original key seen for dense group g
+     *   (for diagnostics; appended in dense order).
+     *
+     * Returns the number of dense groups. The original key is left on the
+     * item type for output traceability; only the dense remap is stored.
+     */
+    int32_t build_group_stack_index(
+            const std::function<int32_t(const ItemType&)>& key_of,
+            std::vector<int32_t>& id_per_stack,
+            std::vector<std::vector<StackId>>& stacks,
+            std::vector<int32_t>& dense_to_original) const;
 
     /*
      * Private attributes

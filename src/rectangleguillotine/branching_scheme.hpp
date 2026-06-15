@@ -9,6 +9,8 @@
 
 #include "treesearchsolver/common.hpp"
 
+#include <functional>
+
 namespace packingsolver
 {
 namespace rectangleguillotine
@@ -440,6 +442,26 @@ private:
      * Return true iff s1 and s2 contains identical objects in the same order.
      */
     bool equals(StackId s1, StackId s2);
+
+    /**
+     * Repair stack_pred_ for one grouping axis (sets or buddies).
+     *
+     * Pass 1 breaks a symmetry link s -> stack_pred_[s] when the two stacks
+     * are not compatible on this axis. Pass 2 relinks a broken entry whose
+     * stack participates in the axis to the nearest earlier compatible,
+     * geometrically-equal predecessor.
+     *
+     * - in_axis(s): stack s participates in this axis (dense group id != -1).
+     * - compatible(s, sp): s and sp may share a symmetry link on this axis.
+     *
+     * Stacks outside the axis (group id == -1) are mutually compatible, so a
+     * pass for one axis leaves the other axis's links and the free stacks
+     * untouched — which is what lets the sets pass and the buddy pass run
+     * back to back and compose.
+     */
+    void repair_stack_pred(
+            const std::function<bool(StackId)>& in_axis,
+            const std::function<bool(StackId, StackId)>& compatible);
 
     Front front(const Node&) const;
 

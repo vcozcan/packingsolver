@@ -51,45 +51,19 @@ BranchingScheme::BranchingScheme(
     }
 
     // Fix stack_pred_ for set instances: break links that cross set
-    // boundaries or have mismatched set_size, then relink broken
-    // entries to valid predecessors within the same set.
+    // boundaries or have mismatched set_size, then relink broken entries
+    // to valid predecessors within the same set.
     if (instance.has_sets()) {
-        // Pass 1: break incompatible links.
-        for (StackId s = 0;
-                s < (StackId)stack_pred_.size();
-                ++s) {
-            StackId sp = stack_pred_[s];
-            if (sp == -1)
-                continue;
-            SetId sid_s = instance.set_id_of_stack(s);
-            SetId sid_sp = instance.set_id_of_stack(sp);
-            if (sid_s != sid_sp
-                    || instance.set_size_of_stack(s)
-                       != instance.set_size_of_stack(sp)) {
-                stack_pred_[s] = -1;
-            }
-        }
-        // Pass 2: relink broken entries to a valid predecessor.
-        for (StackId s = 0;
-                s < (StackId)stack_pred_.size();
-                ++s) {
-            if (stack_pred_[s] != -1)
-                continue;
-            SetId sid = instance.set_id_of_stack(s);
-            if (sid == -1)
-                continue;
-            for (StackId s0 = s - 1; s0 >= 0; --s0) {
-                if (instance.set_id_of_stack(s0) != sid)
-                    continue;
-                if (instance.set_size_of_stack(s0)
-                        != instance.set_size_of_stack(s))
-                    continue;
-                if (equals(s, s0)) {
-                    stack_pred_[s] = s0;
-                    break;
-                }
-            }
-        }
+        repair_stack_pred(
+                [&instance](StackId s) {
+                    return instance.set_id_of_stack(s) != -1;
+                },
+                [&instance](StackId s, StackId sp) {
+                    return instance.set_id_of_stack(s)
+                                   == instance.set_id_of_stack(sp)
+                            && instance.set_size_of_stack(s)
+                                   == instance.set_size_of_stack(sp);
+                });
 
         // Stacks belonging to a set, for sets_complete().
         for (StackId s = 0; s < instance.number_of_stacks(); ++s)
@@ -102,40 +76,47 @@ BranchingScheme::BranchingScheme(
     // stack), then relink broken entries within the same buddy group.
     // Two identical-geometry stacks in different groups are NOT
     // interchangeable — each carries its own co-location constraint — so
-    // the symmetry link must break. This composes with the set pass
-    // above: each pass relinks only its own group type (skipping the
-    // sentinel -1) and treats the other type as -1.
+    // the symmetry link must break. This composes with the set pass above:
+    // free and other-axis stacks have group id -1 and are mutually
+    // compatible, so each pass relinks only its own group type and leaves
+    // the other's links untouched.
     if (instance.has_buddies()) {
-        // Pass 1: break incompatible links.
-        for (StackId s = 0;
-                s < (StackId)stack_pred_.size();
-                ++s) {
-            StackId sp = stack_pred_[s];
-            if (sp == -1)
+        repair_stack_pred(
+                [&instance](StackId s) {
+                    return instance.buddy_id_of_stack(s) != -1;
+                },
+                [&instance](StackId s, StackId sp) {
+                    return instance.buddy_id_of_stack(s)
+                            == instance.buddy_id_of_stack(sp);
+                });
+    }
+}
+
+void BranchingScheme::repair_stack_pred(
+        const std::function<bool(StackId)>& in_axis,
+        const std::function<bool(StackId, StackId)>& compatible)
+{
+    // Pass 1: break incompatible links.
+    for (StackId s = 0; s < (StackId)stack_pred_.size(); ++s) {
+        StackId sp = stack_pred_[s];
+        if (sp == -1)
+            continue;
+        if (!compatible(s, sp))
+            stack_pred_[s] = -1;
+    }
+    // Pass 2: relink a broken entry whose stack is in the axis to the
+    // nearest earlier compatible, geometrically-equal predecessor.
+    for (StackId s = 0; s < (StackId)stack_pred_.size(); ++s) {
+        if (stack_pred_[s] != -1)
+            continue;
+        if (!in_axis(s))
+            continue;
+        for (StackId s0 = s - 1; s0 >= 0; --s0) {
+            if (!compatible(s, s0))
                 continue;
-            if (instance.buddy_id_of_stack(s)
-                    != instance.buddy_id_of_stack(sp)) {
-                stack_pred_[s] = -1;
-            }
-        }
-        // Pass 2: relink broken entries to a valid predecessor in the
-        // same buddy group. Skip free/set stacks (buddy_id == -1) so this
-        // pass never relinks them (mirror the set pass's sid == -1 skip).
-        for (StackId s = 0;
-                s < (StackId)stack_pred_.size();
-                ++s) {
-            if (stack_pred_[s] != -1)
-                continue;
-            BuddyId bid = instance.buddy_id_of_stack(s);
-            if (bid == -1)
-                continue;
-            for (StackId s0 = s - 1; s0 >= 0; --s0) {
-                if (instance.buddy_id_of_stack(s0) != bid)
-                    continue;
-                if (equals(s, s0)) {
-                    stack_pred_[s] = s0;
-                    break;
-                }
+            if (equals(s, s0)) {
+                stack_pred_[s] = s0;
+                break;
             }
         }
     }

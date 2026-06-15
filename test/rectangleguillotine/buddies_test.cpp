@@ -206,8 +206,10 @@ TEST(RectangleGuillotineBuddies, GroupTooBigByArea)
 
 TEST(RectangleGuillotineBuddies, GroupTooBigByAreaWithTrims)
 {
-    // The area precheck is trim-aware: a group that fits the raw plate
-    // but not the usable (trimmed) area is rejected. Usable area here is
+    // The area precheck uses the usable (trimmed) bin area: a group that
+    // fits the raw plate but not the usable area is rejected. Piece
+    // placement is confined to the trimmed area for every trim type, so
+    // the trim type does not matter here — usable area is
     // 3210 x (6000 - 3000) = 9.63 M; the group is 2 x 2000x3210 =
     // 12.84 M > 9.63 M.
     InstanceBuilder instance_builder = buddies_instance_builder();

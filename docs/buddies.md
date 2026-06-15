@@ -122,8 +122,16 @@ auto-assigns them sequential singleton stacks.
 Because the guarantee is hard, a group that cannot fit on any single plate makes
 the whole job infeasible — there is no fallback. `build()` performs a necessary
 condition: for each group, if the sum of `area × copies` exceeds the largest
-usable (trim-aware) bin area, it throws an `std::invalid_argument` naming the
-group. Area is rotation-invariant, so this is orientation-independent.
+usable (trimmed) bin area (`BinType::area()`, all trims subtracted), it throws an
+`std::invalid_argument` naming the group. Area is rotation-invariant, so this is
+orientation-independent.
+
+The bound subtracts all four trims regardless of trim type, because piece
+placement is confined to the trimmed area for every trim type (verified
+empirically): soft trims only relax `min_waste` near the trim and let the
+trailing leftover overhang to the physical edge — they do not move pieces into
+the trim band. So `BinType::area()` is the correct, tight bound, not an
+over-rejection.
 
 This is *necessary, not sufficient*: a group can pass the area check yet still
 be unfittable for guillotine/aspect/defect reasons. That case surfaces as a
@@ -162,7 +170,8 @@ for `set_id`. Copied buddy items legitimately carry both `buddy_id` and a
 materialized `stack_id`; they are exempted from the user-input mutual-exclusion
 check via the builder-private `internal_copy_item_type_ids_` registry, with the
 same singleton-stack shape check that sets use. (In v1 the non-TS algorithms are
-gated off for buddies, but the propagation is wired so parity is additive.)
+gated off for buddies. The metadata propagation is wired, but enabling them is
+**not** purely additive — see Known Limitations.)
 
 ### Solution-level companion checker
 
@@ -210,8 +219,12 @@ Buddies are **tree-search-only** in v1.
 - The gate reads the raw requested flags (like the sets gate), so an explicit
   incompatible request is rejected even when an upstream normalization already
   cleared the local flag.
-- `buddies_complete()` is pre-wired into `better()` so SSK/SVC/DS parity is a
-  clean additive follow-up.
+- `buddies_complete()` is pre-wired into `better()`, but SSK/SVC/DS parity is
+  **not** purely additive: those algorithms emit a single pattern replicated
+  `copies` times, which the solution certificate's replicated-host rule
+  (`bin.copies > 1` ⇒ infeasible) rejects even for a legitimately co-located
+  group. Enabling them needs a co-location-aware replicated-pattern check, not
+  just flipping the gate.
 
 ### Performance
 
@@ -237,7 +250,10 @@ The multi-bin-type-VBPP rejection lives in `optimize()`, not `build()`.
 ## Known Limitations
 
 1. **Tree-search-only; no multi-bin-type VBPP:** see Algorithm Restrictions.
-   `buddies_complete()` is pre-wired so non-TS parity is additive.
+   `buddies_complete()` is pre-wired into `better()`, but non-TS parity is **not**
+   purely additive — the replicated-host rule (`bin.copies > 1` ⇒ infeasible)
+   rejects the single-pattern replicated output SSK/SVC/DS produce, so enabling
+   them requires a co-location-aware replicated-pattern check.
 
 2. **Area precheck is necessary, not sufficient:** a group can pass the area
    check yet be unfittable for guillotine/aspect/defect reasons, surfacing as a

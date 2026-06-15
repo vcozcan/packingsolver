@@ -518,6 +518,50 @@ Area InstanceBuilder::compute_bin_types_area_max() const
     return bin_types_area_max;
 }
 
+int32_t InstanceBuilder::build_group_stack_index(
+        const std::function<int32_t(const ItemType&)>& key_of,
+        std::vector<int32_t>& id_per_stack,
+        std::vector<std::vector<StackId>>& stacks,
+        std::vector<int32_t>& dense_to_original) const
+{
+    id_per_stack.assign(instance_.number_of_stacks(), -1);
+
+    // Build original-to-dense remapping (first-appearance order).
+    std::map<int32_t, int32_t> remap;
+    int32_t next_dense = 0;
+    for (ItemTypeId item_type_id = 0;
+            item_type_id < instance_.number_of_item_types();
+            ++item_type_id) {
+        int32_t key = key_of(instance_.item_type(item_type_id));
+        if (key == -1)
+            continue;
+        if (remap.find(key) == remap.end()) {
+            remap[key] = next_dense++;
+            dense_to_original.push_back(key);
+        }
+    }
+
+    // Populate per-stack metadata using dense indices.
+    for (ItemTypeId item_type_id = 0;
+            item_type_id < instance_.number_of_item_types();
+            ++item_type_id) {
+        const ItemType& item_type = instance_.item_type(item_type_id);
+        int32_t key = key_of(item_type);
+        if (key == -1)
+            continue;
+        id_per_stack[item_type.stack_id] = remap[key];
+    }
+
+    // Bucket stacks by dense group id.
+    stacks.assign(next_dense, {});
+    for (StackId s = 0; s < instance_.number_of_stacks(); ++s) {
+        int32_t g = id_per_stack[s];
+        if (g != -1)
+            stacks[g].push_back(s);
+    }
+    return next_dense;
+}
+
 void InstanceBuilder::set_item_types_infinite_copies()
 {
     Area bin_types_area_max = compute_bin_types_area_max();
@@ -1088,16 +1132,18 @@ Instance InstanceBuilder::build()
     // --- Sets: populate per-stack metadata with dense indices ---
     // item_type.set_id is NOT modified — it keeps the original CSV
     // value for output traceability.  The dense remapping is stored
-    // only in set_id_per_stack_ and set_stacks_.
+    // only in set_id_per_stack_, set_size_per_stack_ and set_stacks_.
     if (instance_.has_sets_) {
-        instance_.set_id_per_stack_.resize(
-                instance_.number_of_stacks(), -1);
-        instance_.set_size_per_stack_.resize(
-                instance_.number_of_stacks(), -1);
+        std::vector<SetId> dense_to_original;  // unused for sets diagnostics
+        instance_.number_of_sets_ = build_group_stack_index(
+                [](const ItemType& item_type) { return item_type.set_id; },
+                instance_.set_id_per_stack_,
+                instance_.set_stacks_,
+                dense_to_original);
 
-        // Build original-to-dense remapping.
-        std::map<SetId, SetId> remap;
-        SetId next_dense = 0;
+        // set_size is a per-stack attribute beyond the generic group index.
+        instance_.set_size_per_stack_.assign(
+                instance_.number_of_stacks(), -1);
         for (ItemTypeId item_type_id = 0;
                 item_type_id < instance_.number_of_item_types();
                 ++item_type_id) {
@@ -1105,31 +1151,8 @@ Instance InstanceBuilder::build()
                     = instance_.item_type(item_type_id);
             if (item_type.set_id == -1)
                 continue;
-            if (remap.find(item_type.set_id) == remap.end())
-                remap[item_type.set_id] = next_dense++;
-        }
-        instance_.number_of_sets_ = next_dense;
-
-        // Populate per-stack metadata using dense indices.
-        for (ItemTypeId item_type_id = 0;
-                item_type_id < instance_.number_of_item_types();
-                ++item_type_id) {
-            const ItemType& item_type
-                    = instance_.item_type(item_type_id);
-            if (item_type.set_id == -1)
-                continue;
-            StackId s = item_type.stack_id;
-            instance_.set_id_per_stack_[s] = remap[item_type.set_id];
-            instance_.set_size_per_stack_[s] = item_type.set_size;
-        }
-
-        instance_.set_stacks_.resize(instance_.number_of_sets_);
-        for (StackId s = 0;
-                s < instance_.number_of_stacks();
-                ++s) {
-            SetId sid = instance_.set_id_per_stack_[s];
-            if (sid != -1)
-                instance_.set_stacks_[sid].push_back(s);
+            instance_.set_size_per_stack_[item_type.stack_id]
+                    = item_type.set_size;
         }
     }
 
@@ -1138,47 +1161,12 @@ Instance InstanceBuilder::build()
     // value for output traceability.  The dense remapping is stored only
     // in buddy_id_per_stack_, buddy_stacks_ and buddy_total_.
     if (instance_.has_buddies_) {
-        instance_.buddy_id_per_stack_.resize(
-                instance_.number_of_stacks(), -1);
-
-        // Build original-to-dense remapping (first-appearance order).
-        std::map<BuddyId, BuddyId> remap;
         std::vector<BuddyId> dense_to_original;
-        BuddyId next_dense = 0;
-        for (ItemTypeId item_type_id = 0;
-                item_type_id < instance_.number_of_item_types();
-                ++item_type_id) {
-            const ItemType& item_type
-                    = instance_.item_type(item_type_id);
-            if (item_type.buddy_id == -1)
-                continue;
-            if (remap.find(item_type.buddy_id) == remap.end()) {
-                remap[item_type.buddy_id] = next_dense++;
-                dense_to_original.push_back(item_type.buddy_id);
-            }
-        }
-        instance_.number_of_buddies_ = next_dense;
-
-        // Populate per-stack metadata using dense indices.
-        for (ItemTypeId item_type_id = 0;
-                item_type_id < instance_.number_of_item_types();
-                ++item_type_id) {
-            const ItemType& item_type
-                    = instance_.item_type(item_type_id);
-            if (item_type.buddy_id == -1)
-                continue;
-            StackId s = item_type.stack_id;
-            instance_.buddy_id_per_stack_[s] = remap[item_type.buddy_id];
-        }
-
-        instance_.buddy_stacks_.resize(instance_.number_of_buddies_);
-        for (StackId s = 0;
-                s < instance_.number_of_stacks();
-                ++s) {
-            BuddyId bid = instance_.buddy_id_per_stack_[s];
-            if (bid != -1)
-                instance_.buddy_stacks_[bid].push_back(s);
-        }
+        instance_.number_of_buddies_ = build_group_stack_index(
+                [](const ItemType& item_type) { return item_type.buddy_id; },
+                instance_.buddy_id_per_stack_,
+                instance_.buddy_stacks_,
+                dense_to_original);
 
         // Compute per-group totals (item copies) and areas. buddy_total_
         // is the number of item copies that must share one plate; the
@@ -1192,7 +1180,7 @@ Instance InstanceBuilder::build()
                     = instance_.item_type(item_type_id);
             if (item_type.buddy_id == -1)
                 continue;
-            BuddyId bid = remap[item_type.buddy_id];
+            BuddyId bid = instance_.buddy_id_per_stack_[item_type.stack_id];
             instance_.buddy_total_[bid] += item_type.copies;
             buddy_area[bid] += item_type.copies * item_type.area();
         }
@@ -1212,9 +1200,14 @@ Instance InstanceBuilder::build()
         // must fit on a single bin.  Area is rotation-invariant, so if the
         // group's total item area exceeds the largest usable (trimmed) bin
         // area, no co-located packing can exist and the whole job is
-        // infeasible under the hard same-plate guarantee.  This is
-        // necessary, not sufficient (guillotine/aspect/defects can still
-        // make a group unfittable — that surfaces as solver no-solution).
+        // infeasible under the hard same-plate guarantee.  BinType::area()
+        // (all trims subtracted) is the correct bound: piece placement is
+        // confined to the trimmed area for every trim type — soft trims
+        // only relax min_waste and let the trailing leftover overhang, they
+        // do not move pieces into the trim band (verified empirically).
+        // This is necessary, not sufficient (guillotine/aspect/defects can
+        // still make a group unfittable — that surfaces as solver
+        // no-solution).
         Area bin_types_area_max_buddy = compute_bin_types_area_max();
         for (BuddyId bid = 0; bid < instance_.number_of_buddies_; ++bid) {
             if (buddy_area[bid] > bin_types_area_max_buddy) {
