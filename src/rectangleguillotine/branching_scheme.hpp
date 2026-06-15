@@ -463,6 +463,46 @@ private:
         return true;
     }
 
+    /** Total item copies of buddy group g already placed in 'node'. */
+    inline ItemPos buddy_placed(const Node& node, BuddyId g) const
+    {
+        ItemPos placed = 0;
+        for (StackId s: instance_.buddy_stacks(g))
+            placed += node.pos_stack[s];
+        return placed;
+    }
+
+    /**
+     * Return 'true' iff some buddy group of 'node' is "open" — partially
+     * placed (0 < placed < total). While a group is open, children() must
+     * not open a new bin, so the group lands on a single plate.
+     *
+     * Open-state is a pure function of pos_stack (groups are
+     * single-occurrence), so no Node/NodeHasher/dominance state is needed
+     * — the same property that let sets ship without Node changes.  Uses
+     * instance_ (original); stack indices and buddy metadata are invariant
+     * under flipping.
+     */
+    inline bool buddies_open(const Node& node) const
+    {
+        for (BuddyId g = 0; g < instance_.number_of_buddies(); ++g) {
+            ItemPos placed = buddy_placed(node, g);
+            if (placed > 0 && placed < instance_.buddy_total(g))
+                return true;
+        }
+        return false;
+    }
+
+    /**
+     * Return 'true' iff no buddy group of 'node' is open (every group is
+     * either untouched or fully placed). This is the all-or-nothing
+     * retention gate used by better().
+     */
+    inline bool buddies_complete(const Node& node) const
+    {
+        return !buddies_open(node);
+    }
+
     /** Get the width of a node. */
     inline Length width(const Node& node) const { return (instance_.parameters().number_of_stages == 3)? node.x1_curr: node.y2_curr; }
 

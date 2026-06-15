@@ -159,6 +159,7 @@ std::ostream& packingsolver::rectangleguillotine::operator<<(
         << " oriented " << item_type.oriented
         << " set_id " << item_type.set_id
         << " set_size " << item_type.set_size
+        << " buddy_id " << item_type.buddy_id
         ;
     return os;
 }
@@ -200,13 +201,14 @@ void Instance::write(
                 FUNC_SIGNATURE + ": "
                 "unable to open file \"" + items_path + "\".");
     }
-    if (has_sets_) {
-        f_items << "ID,WIDTH,HEIGHT,PROFIT,COPIES,ORIENTED,"
-                   "STACK_ID,SET_ID,SET_SIZE" << std::endl;
-    } else {
-        f_items << "ID,WIDTH,HEIGHT,PROFIT,COPIES,ORIENTED,"
-                   "STACK_ID" << std::endl;
-    }
+    // SET_ID/SET_SIZE and BUDDY_ID are emitted independently — a single
+    // instance may carry sets, buddies, both, or neither (4 header combos).
+    f_items << "ID,WIDTH,HEIGHT,PROFIT,COPIES,ORIENTED,STACK_ID";
+    if (has_sets_)
+        f_items << ",SET_ID,SET_SIZE";
+    if (has_buddies_)
+        f_items << ",BUDDY_ID";
+    f_items << std::endl;
     for (ItemTypeId item_type_id = 0;
             item_type_id < number_of_item_types();
             ++item_type_id) {
@@ -217,16 +219,13 @@ void Instance::write(
             << item_type.rect.h << ","
             << item_type.profit << ","
             << item_type.copies << ","
-            << item_type.oriented << ",";
-        if (has_sets_) {
-            f_items
-                << item_type.stack_id << ","
-                << item_type.set_id << ","
-                << item_type.set_size << std::endl;
-        } else {
-            f_items
-                << item_type.stack_id << std::endl;
-        }
+            << item_type.oriented << ","
+            << item_type.stack_id;
+        if (has_sets_)
+            f_items << "," << item_type.set_id << "," << item_type.set_size;
+        if (has_buddies_)
+            f_items << "," << item_type.buddy_id;
+        f_items << std::endl;
     }
 
     // Export bins.

@@ -174,10 +174,11 @@ public:
      *
      * This method is used when algorithms (SVC, CG, dichotomic search) and
      * the InstanceFlipper build subinstances from an already-built instance.
-     * It propagates set metadata and keeps the materialized stack_id
-     * unchanged so that stack indices remain invariant between the original
-     * and the copy; the copied items are exempted from the set/stack
-     * mutual-exclusion check in build() (which targets user input).
+     * It propagates set and buddy metadata and keeps the materialized
+     * stack_id unchanged so that stack indices remain invariant between the
+     * original and the copy; the copied items are exempted from the
+     * set/buddy vs stack mutual-exclusion check in build() (which targets
+     * user input).
      */
     void add_item_type(
             const ItemType& item_type,
@@ -187,6 +188,10 @@ public:
     /** Set the set_id and set_size for the most recently added item type.
      *  Must be called immediately after add_item_type(). */
     void set_last_item_type_set(SetId set_id, ItemPos set_size);
+
+    /** Set the buddy_id for the most recently added item type.
+     *  Must be called immediately after add_item_type(). */
+    void set_last_item_type_buddy(BuddyId buddy_id);
 
     /**
      * For each item type, set an infinite number of copies.

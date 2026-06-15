@@ -2,6 +2,8 @@
 
 #include "packingsolver/rectangleguillotine/instance.hpp"
 
+#include <set>
+
 namespace packingsolver
 {
 namespace rectangleguillotine
@@ -72,7 +74,8 @@ public:
         instance_(&instance),
         bin_copies_(instance.number_of_bin_types(), 0),
         item_copies_(instance.number_of_item_types(), 0),
-        set_active_states_(instance.number_of_sets())
+        set_active_states_(instance.number_of_sets()),
+        buddy_bins_(instance.number_of_buddies())
     { }
 
     void append(
@@ -127,6 +130,17 @@ public:
      * multiple of its set_size (no sub-group left incomplete).
      */
     bool sets_complete() const;
+
+    /**
+     * Feasibility for the buddies (same-plate co-location).
+     *
+     * 'false' iff any buddy group spans more than one bin, lands in a
+     * replicated (copies > 1) pattern bin, or ends partially placed
+     * (0 < placed < total). Subsumes completeness, so unlike sets there
+     * is no separate buddies_complete() — a group must be either fully
+     * co-located on one single (copies == 1) plate or entirely absent.
+     */
+    bool buddies_feasible() const;
 
     bool defects_feasible() const { return defects_feasible_; }
 
@@ -269,6 +283,13 @@ private:
     /** Feasibility for the sets. */
     bool sets_feasible_ = true;
 
+    /**
+     * Feasibility for the buddies (incremental part: spans-more-than-one-
+     * bin and replicated-host detection). The end-state partial-group
+     * check is folded into the buddies_feasible() accessor.
+     */
+    bool buddies_feasible_ = true;
+
     /** Feasibility for the defect intersections. */
     bool defects_feasible_ = true;
 
@@ -339,6 +360,18 @@ private:
 
     /** Active state per set. */
     std::vector<ActiveSetState> set_active_states_;
+
+    /*
+     * Private attributes: buddies check state
+     *
+     * Persisted across update_indicators() calls — bins are appended
+     * incrementally. Indexed by DENSE buddy id
+     * (instance().buddy_id_of_stack()), not by the original (possibly
+     * sparse) ItemType::buddy_id.
+     */
+
+    /** For each dense buddy group, the set of bin positions holding it. */
+    std::vector<std::set<BinPos>> buddy_bins_;
 
     /** Total area of the items of the solution. */
     Area item_area_ = 0;

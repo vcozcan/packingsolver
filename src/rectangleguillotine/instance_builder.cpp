@@ -485,12 +485,24 @@ void InstanceBuilder::add_item_type(
         // user-input mutual-exclusion check in build().
         internal_copy_item_type_ids_.insert(item_type_id);
     }
+    if (item_type.buddy_id >= 0) {
+        set_last_item_type_buddy(item_type.buddy_id);
+        // A buddy item copied from a built instance carries the singleton
+        // stack_id that build() materialized; exempt it from the
+        // user-input mutual-exclusion check in build().
+        internal_copy_item_type_ids_.insert(item_type_id);
+    }
 }
 
 void InstanceBuilder::set_last_item_type_set(SetId set_id, ItemPos set_size)
 {
     instance_.item_types_.back().set_id = set_id;
     instance_.item_types_.back().set_size = set_size;
+}
+
+void InstanceBuilder::set_last_item_type_buddy(BuddyId buddy_id)
+{
+    instance_.item_types_.back().buddy_id = buddy_id;
 }
 
 Area InstanceBuilder::compute_bin_types_area_max() const
@@ -841,6 +853,7 @@ void InstanceBuilder::read_item_types(
         StackId stack_id = -1;
         SetId set_id = -1;
         ItemPos set_size = -1;
+        BuddyId buddy_id = -1;
 
         for (Counter i = 0; i < (Counter)line.size(); ++i) {
             if (labels[i] == "WIDTH") {
@@ -862,6 +875,9 @@ void InstanceBuilder::read_item_types(
             } else if (labels[i] == "SET_SIZE") {
                 if (!line[i].empty())
                     set_size = (ItemPos)std::stol(line[i]);
+            } else if (labels[i] == "BUDDY_ID") {
+                if (!line[i].empty())
+                    buddy_id = (BuddyId)std::stol(line[i]);
             }
         }
 
@@ -888,6 +904,9 @@ void InstanceBuilder::read_item_types(
                 stack_id);
         if (set_id != -1 || set_size != -1) {
             set_last_item_type_set(set_id, set_size);
+        }
+        if (buddy_id != -1) {
+            set_last_item_type_buddy(buddy_id);
         }
     }
 }
@@ -916,11 +935,13 @@ Instance InstanceBuilder::build()
         }
     }
     bool has_any_set = false;
+    bool has_any_buddy = false;
     for (ItemTypeId item_type_id = 0;
             item_type_id < instance_.number_of_item_types();
             ++item_type_id) {
         const ItemType& item_type = instance_.item_type(item_type_id);
         if (item_type.set_id != -1) has_any_set = true;
+        if (item_type.buddy_id != -1) has_any_buddy = true;
         // V10: per-item mutual exclusion (defense-in-depth).
         // Items registered by the internal copy overload are exempt:
         // their stack_id is the singleton stack a previous build()
@@ -939,6 +960,33 @@ Instance InstanceBuilder::build()
                         + std::to_string(item_type.stack_id)
                         + " with another item type."
                         " A copied set item must keep the singleton stack"
+                        " materialized by build().");
+            }
+        }
+        // Buddies are mutually exclusive with sets on the same item.
+        if (item_type.set_id >= 0 && item_type.buddy_id >= 0) {
+            throw std::invalid_argument(
+                    "item type " + std::to_string(item_type_id)
+                    + " has both SET_ID and BUDDY_ID."
+                    " They are mutually exclusive on the same item.");
+        }
+        // Buddies are mutually exclusive with an explicit STACK_ID, same as
+        // sets. Internal-copy items are exempt (they carry the singleton
+        // stack build() materialized, not user input).
+        if (item_type.buddy_id >= 0 && item_type.stack_id >= 0) {
+            if (internal_copy_item_type_ids_.count(item_type_id) == 0) {
+                throw std::invalid_argument(
+                        "item type " + std::to_string(item_type_id)
+                        + " has both BUDDY_ID and explicit STACK_ID."
+                        " They are mutually exclusive on the same item.");
+            }
+            if (item_types_per_explicit_stack[item_type.stack_id] > 1) {
+                throw std::invalid_argument(
+                        "item type " + std::to_string(item_type_id)
+                        + " has BUDDY_ID and shares STACK_ID "
+                        + std::to_string(item_type.stack_id)
+                        + " with another item type."
+                        " A copied buddy item must keep the singleton stack"
                         " materialized by build().");
             }
         }
@@ -988,6 +1036,25 @@ Instance InstanceBuilder::build()
             }
         }
         instance_.has_sets_ = true;
+    }
+
+    if (has_any_buddy) {
+        for (ItemTypeId item_type_id = 0;
+                item_type_id < instance_.number_of_item_types();
+                ++item_type_id) {
+            const ItemType& item_type
+                    = instance_.item_type(item_type_id);
+            if (item_type.buddy_id == -1)
+                continue;
+            // Catches BUDDY_ID values like -2, -3 (not just -1).
+            if (item_type.buddy_id < 0) {
+                throw std::invalid_argument(
+                        "item type " + std::to_string(item_type_id)
+                        + " has negative BUDDY_ID ("
+                        + std::to_string(item_type.buddy_id) + ").");
+            }
+        }
+        instance_.has_buddies_ = true;
     }
 
     // Compute item_type_ids_.
@@ -1063,6 +1130,102 @@ Instance InstanceBuilder::build()
             SetId sid = instance_.set_id_per_stack_[s];
             if (sid != -1)
                 instance_.set_stacks_[sid].push_back(s);
+        }
+    }
+
+    // --- Buddies: populate per-stack metadata with dense indices ---
+    // item_type.buddy_id is NOT modified — it keeps the original CSV
+    // value for output traceability.  The dense remapping is stored only
+    // in buddy_id_per_stack_, buddy_stacks_ and buddy_total_.
+    if (instance_.has_buddies_) {
+        instance_.buddy_id_per_stack_.resize(
+                instance_.number_of_stacks(), -1);
+
+        // Build original-to-dense remapping (first-appearance order).
+        std::map<BuddyId, BuddyId> remap;
+        std::vector<BuddyId> dense_to_original;
+        BuddyId next_dense = 0;
+        for (ItemTypeId item_type_id = 0;
+                item_type_id < instance_.number_of_item_types();
+                ++item_type_id) {
+            const ItemType& item_type
+                    = instance_.item_type(item_type_id);
+            if (item_type.buddy_id == -1)
+                continue;
+            if (remap.find(item_type.buddy_id) == remap.end()) {
+                remap[item_type.buddy_id] = next_dense++;
+                dense_to_original.push_back(item_type.buddy_id);
+            }
+        }
+        instance_.number_of_buddies_ = next_dense;
+
+        // Populate per-stack metadata using dense indices.
+        for (ItemTypeId item_type_id = 0;
+                item_type_id < instance_.number_of_item_types();
+                ++item_type_id) {
+            const ItemType& item_type
+                    = instance_.item_type(item_type_id);
+            if (item_type.buddy_id == -1)
+                continue;
+            StackId s = item_type.stack_id;
+            instance_.buddy_id_per_stack_[s] = remap[item_type.buddy_id];
+        }
+
+        instance_.buddy_stacks_.resize(instance_.number_of_buddies_);
+        for (StackId s = 0;
+                s < instance_.number_of_stacks();
+                ++s) {
+            BuddyId bid = instance_.buddy_id_per_stack_[s];
+            if (bid != -1)
+                instance_.buddy_stacks_[bid].push_back(s);
+        }
+
+        // Compute per-group totals (item copies) and areas. buddy_total_
+        // is the number of item copies that must share one plate; the
+        // branching scheme uses it to decide when a group is fully placed.
+        instance_.buddy_total_.assign(instance_.number_of_buddies_, 0);
+        std::vector<Area> buddy_area(instance_.number_of_buddies_, 0);
+        for (ItemTypeId item_type_id = 0;
+                item_type_id < instance_.number_of_item_types();
+                ++item_type_id) {
+            const ItemType& item_type
+                    = instance_.item_type(item_type_id);
+            if (item_type.buddy_id == -1)
+                continue;
+            BuddyId bid = remap[item_type.buddy_id];
+            instance_.buddy_total_[bid] += item_type.copies;
+            buddy_area[bid] += item_type.copies * item_type.area();
+        }
+
+        // Group-total >= 2: a single-piece buddy group is meaningless.
+        for (BuddyId bid = 0; bid < instance_.number_of_buddies_; ++bid) {
+            if (instance_.buddy_total_[bid] < 2) {
+                throw std::invalid_argument(
+                        "buddy group " + std::to_string(dense_to_original[bid])
+                        + " has only " + std::to_string(instance_.buddy_total_[bid])
+                        + " item(s); a buddy group must contain at least 2"
+                        " items (across all rows and copies).");
+            }
+        }
+
+        // Infeasibility precheck (necessary condition): every buddy group
+        // must fit on a single bin.  Area is rotation-invariant, so if the
+        // group's total item area exceeds the largest usable (trimmed) bin
+        // area, no co-located packing can exist and the whole job is
+        // infeasible under the hard same-plate guarantee.  This is
+        // necessary, not sufficient (guillotine/aspect/defects can still
+        // make a group unfittable — that surfaces as solver no-solution).
+        Area bin_types_area_max_buddy = compute_bin_types_area_max();
+        for (BuddyId bid = 0; bid < instance_.number_of_buddies_; ++bid) {
+            if (buddy_area[bid] > bin_types_area_max_buddy) {
+                throw std::invalid_argument(
+                        "buddy group " + std::to_string(dense_to_original[bid])
+                        + " has total item area " + std::to_string(buddy_area[bid])
+                        + " which exceeds the largest usable bin area ("
+                        + std::to_string(bin_types_area_max_buddy)
+                        + "); the group cannot fit on a single plate, so the"
+                        " job is infeasible under the same-plate guarantee.");
+            }
         }
     }
 

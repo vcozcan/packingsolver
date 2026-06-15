@@ -315,6 +315,34 @@ void Solution::update_indicators(
         }
     }
 
+    // Check buddies: every buddy group must be co-located on a single
+    // physical plate. Record the bins each group's items appear in and
+    // flag any group that spans more than one bin entry, or lands in a
+    // replicated (copies > 1) pattern bin (which would scatter its pieces
+    // across 'copies' physical plates). State persists across calls
+    // because bins arrive incrementally; the end-state partial-group
+    // check lives in buddies_feasible(). This is independent defense-in-
+    // depth: it also catches SolutionBuilder / future-algorithm output
+    // that the branching-scheme new-bin guard never saw. Flags only.
+    if (instance().has_buddies()) {
+        for (const SolutionNode& node: bin.nodes) {
+            if (node.d < 1 || node.item_type_id < 0)
+                continue;
+            const ItemType& item_type
+                    = instance().item_type(node.item_type_id);
+            if (item_type.buddy_id < 0)
+                continue;
+            // ItemType::buddy_id keeps the original (possibly sparse) CSV
+            // value; the dense id lives on the stack.
+            BuddyId g = instance().buddy_id_of_stack(item_type.stack_id);
+            buddy_bins_[g].insert(bin_pos);
+            if (buddy_bins_[g].size() > 1 || bin.copies > 1) {
+                buddies_feasible_ = false;
+                feasible_ = false;
+            }
+        }
+    }
+
     if (!minimum_waste_length_feasible()) {
         for (const SolutionNode& node: bin.nodes) {
             std::cout << node << std::endl;
@@ -333,6 +361,29 @@ bool Solution::sets_complete() const
         if (item_type.set_id < 0)
             continue;
         if (item_copies_[item_type_id] % item_type.set_size != 0)
+            return false;
+    }
+    return true;
+}
+
+bool Solution::buddies_feasible() const
+{
+    // Incremental violations (spans > 1 bin, replicated host) were flagged
+    // during update_indicators().
+    if (!buddies_feasible_)
+        return false;
+    if (!instance().has_buddies())
+        return true;
+    // End-state completeness: a buddy group must be fully placed
+    // (all copies co-located) or entirely absent — never partial. placed
+    // is the total copies of the group's member item types. Each buddy
+    // stack is a singleton stack of one item type, so summing item_copies_
+    // over the group's member item types double-counts nothing.
+    for (BuddyId g = 0; g < instance().number_of_buddies(); ++g) {
+        ItemPos placed = 0;
+        for (StackId s: instance().buddy_stacks(g))
+            placed += item_copies_[instance().item(s, 0)];
+        if (placed != 0 && placed != instance().buddy_total(g))
             return false;
     }
     return true;
