@@ -51,50 +51,74 @@ BranchingScheme::BranchingScheme(
     }
 
     // Fix stack_pred_ for set instances: break links that cross set
-    // boundaries or have mismatched set_size, then relink broken
-    // entries to valid predecessors within the same set.
+    // boundaries or have mismatched set_size, then relink broken entries
+    // to valid predecessors within the same set.
     if (instance.has_sets()) {
-        // Pass 1: break incompatible links.
-        for (StackId s = 0;
-                s < (StackId)stack_pred_.size();
-                ++s) {
-            StackId sp = stack_pred_[s];
-            if (sp == -1)
-                continue;
-            SetId sid_s = instance.set_id_of_stack(s);
-            SetId sid_sp = instance.set_id_of_stack(sp);
-            if (sid_s != sid_sp
-                    || instance.set_size_of_stack(s)
-                       != instance.set_size_of_stack(sp)) {
-                stack_pred_[s] = -1;
-            }
-        }
-        // Pass 2: relink broken entries to a valid predecessor.
-        for (StackId s = 0;
-                s < (StackId)stack_pred_.size();
-                ++s) {
-            if (stack_pred_[s] != -1)
-                continue;
-            SetId sid = instance.set_id_of_stack(s);
-            if (sid == -1)
-                continue;
-            for (StackId s0 = s - 1; s0 >= 0; --s0) {
-                if (instance.set_id_of_stack(s0) != sid)
-                    continue;
-                if (instance.set_size_of_stack(s0)
-                        != instance.set_size_of_stack(s))
-                    continue;
-                if (equals(s, s0)) {
-                    stack_pred_[s] = s0;
-                    break;
-                }
-            }
-        }
+        repair_stack_pred(
+                [&instance](StackId s) {
+                    return instance.set_id_of_stack(s) != -1;
+                },
+                [&instance](StackId s, StackId sp) {
+                    return instance.set_id_of_stack(s)
+                                   == instance.set_id_of_stack(sp)
+                            && instance.set_size_of_stack(s)
+                                   == instance.set_size_of_stack(sp);
+                });
 
         // Stacks belonging to a set, for sets_complete().
         for (StackId s = 0; s < instance.number_of_stacks(); ++s)
             if (instance.set_id_of_stack(s) != -1)
                 set_stack_list_.push_back(s);
+    }
+
+    // Fix stack_pred_ for buddy instances: break links that cross buddy
+    // group boundaries (including a buddy stack linked to a free/set
+    // stack), then relink broken entries within the same buddy group.
+    // Two identical-geometry stacks in different groups are NOT
+    // interchangeable — each carries its own co-location constraint — so
+    // the symmetry link must break. This composes with the set pass above:
+    // free and other-axis stacks have group id -1 and are mutually
+    // compatible, so each pass relinks only its own group type and leaves
+    // the other's links untouched.
+    if (instance.has_buddies()) {
+        repair_stack_pred(
+                [&instance](StackId s) {
+                    return instance.buddy_id_of_stack(s) != -1;
+                },
+                [&instance](StackId s, StackId sp) {
+                    return instance.buddy_id_of_stack(s)
+                            == instance.buddy_id_of_stack(sp);
+                });
+    }
+}
+
+void BranchingScheme::repair_stack_pred(
+        const std::function<bool(StackId)>& in_axis,
+        const std::function<bool(StackId, StackId)>& compatible)
+{
+    // Pass 1: break incompatible links.
+    for (StackId s = 0; s < (StackId)stack_pred_.size(); ++s) {
+        StackId sp = stack_pred_[s];
+        if (sp == -1)
+            continue;
+        if (!compatible(s, sp))
+            stack_pred_[s] = -1;
+    }
+    // Pass 2: relink a broken entry whose stack is in the axis to the
+    // nearest earlier compatible, geometrically-equal predecessor.
+    for (StackId s = 0; s < (StackId)stack_pred_.size(); ++s) {
+        if (stack_pred_[s] != -1)
+            continue;
+        if (!in_axis(s))
+            continue;
+        for (StackId s0 = s - 1; s0 >= 0; --s0) {
+            if (!compatible(s, s0))
+                continue;
+            if (equals(s, s0)) {
+                stack_pred_[s] = s0;
+                break;
+            }
+        }
     }
 }
 
@@ -202,6 +226,10 @@ bool BranchingScheme::better(
         // full placement too).
         if (!set_stack_list_.empty() && !sets_complete(*node_1))
             return false;
+        // Buddies: only retain nodes with no open (half-placed) group, so
+        // a result never co-locates a group across the bin boundary.
+        if (instance_.has_buddies() && !buddies_complete(*node_1))
+            return false;
         if (node_2->profit > node_1->profit)
             return false;
         if (node_2->profit < node_1->profit)
@@ -246,6 +274,10 @@ bool BranchingScheme::better(
         // outer algorithm using a different inner objective must
         // extend this rule or half-sub-groups would be retained.
         if (!set_stack_list_.empty() && !sets_complete(*node_1))
+            return false;
+        // Buddies: a Knapsack result may drop a group entirely (0 copies)
+        // but never retain it half-placed (all-or-nothing co-location).
+        if (instance_.has_buddies() && !buddies_complete(*node_1))
             return false;
         return node_2->profit < node_1->profit;
     } default: {
@@ -576,6 +608,17 @@ std::vector<std::shared_ptr<BranchingScheme::Node>> BranchingScheme::children(
                 && parent.item_type_id_1 == -1
                 && parent.item_type_id_2 == -1
                 && df < 0) {
+            break;
+        }
+        // Don't open a new bin while a buddy group is partially placed.
+        // Buddies must be co-located on a single plate; once a group is
+        // "open" (some but not all of its copies placed), the only legal
+        // moves are within the current bin. The descending df loop makes
+        // every df < 0 a new-bin transition, so break (like the defect
+        // guard above) ends new-bin exploration for this parent.
+        if (df < 0
+                && instance_.has_buddies()
+                && buddies_open(parent)) {
             break;
         }
 
@@ -1878,6 +1921,14 @@ Solution BranchingScheme::to_solution(
         if (!solution.sets_complete()) {
             throw std::logic_error(
                     FUNC_SIGNATURE + ": solution doesn't satisfy sets completeness.");
+        }
+        // Buddies are a same-bin invariant; a last-bin-only reconstruction
+        // legally holds only part of a group, so check only full ones.
+        // buddies_feasible() already subsumes completeness (it rejects a
+        // partially-placed group), so no separate completeness check.
+        if (!solution.buddies_feasible()) {
+            throw std::logic_error(
+                    FUNC_SIGNATURE + ": solution doesn't satisfy buddies.");
         }
     }
     if (!solution.defects_feasible()) {

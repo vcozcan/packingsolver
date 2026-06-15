@@ -9,6 +9,8 @@
 
 #include "treesearchsolver/common.hpp"
 
+#include <functional>
+
 namespace packingsolver
 {
 namespace rectangleguillotine
@@ -441,6 +443,26 @@ private:
      */
     bool equals(StackId s1, StackId s2);
 
+    /**
+     * Repair stack_pred_ for one grouping axis (sets or buddies).
+     *
+     * Pass 1 breaks a symmetry link s -> stack_pred_[s] when the two stacks
+     * are not compatible on this axis. Pass 2 relinks a broken entry whose
+     * stack participates in the axis to the nearest earlier compatible,
+     * geometrically-equal predecessor.
+     *
+     * - in_axis(s): stack s participates in this axis (dense group id != -1).
+     * - compatible(s, sp): s and sp may share a symmetry link on this axis.
+     *
+     * Stacks outside the axis (group id == -1) are mutually compatible, so a
+     * pass for one axis leaves the other axis's links and the free stacks
+     * untouched — which is what lets the sets pass and the buddy pass run
+     * back to back and compose.
+     */
+    void repair_stack_pred(
+            const std::function<bool(StackId)>& in_axis,
+            const std::function<bool(StackId, StackId)>& compatible);
+
     Front front(const Node&) const;
 
     bool dominates(const Front& f1, const Front& f2) const;
@@ -461,6 +483,46 @@ private:
                 return false;
         }
         return true;
+    }
+
+    /** Total item copies of buddy group g already placed in 'node'. */
+    inline ItemPos buddy_placed(const Node& node, BuddyId g) const
+    {
+        ItemPos placed = 0;
+        for (StackId s: instance_.buddy_stacks(g))
+            placed += node.pos_stack[s];
+        return placed;
+    }
+
+    /**
+     * Return 'true' iff some buddy group of 'node' is "open" — partially
+     * placed (0 < placed < total). While a group is open, children() must
+     * not open a new bin, so the group lands on a single plate.
+     *
+     * Open-state is a pure function of pos_stack (groups are
+     * single-occurrence), so no Node/NodeHasher/dominance state is needed
+     * — the same property that let sets ship without Node changes.  Uses
+     * instance_ (original); stack indices and buddy metadata are invariant
+     * under flipping.
+     */
+    inline bool buddies_open(const Node& node) const
+    {
+        for (BuddyId g = 0; g < instance_.number_of_buddies(); ++g) {
+            ItemPos placed = buddy_placed(node, g);
+            if (placed > 0 && placed < instance_.buddy_total(g))
+                return true;
+        }
+        return false;
+    }
+
+    /**
+     * Return 'true' iff no buddy group of 'node' is open (every group is
+     * either untouched or fully placed). This is the all-or-nothing
+     * retention gate used by better().
+     */
+    inline bool buddies_complete(const Node& node) const
+    {
+        return !buddies_open(node);
     }
 
     /** Get the width of a node. */

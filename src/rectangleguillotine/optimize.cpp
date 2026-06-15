@@ -699,6 +699,51 @@ packingsolver::rectangleguillotine::Output packingsolver::rectangleguillotine::o
         }
     }
 
+    // Buddies: tree-search-only gate (v1).
+    //
+    // The same-plate guarantee is enforced by the branching scheme's
+    // new-bin guard, which only exists in tree search. Column generation,
+    // sequential single knapsack, sequential value correction and
+    // dichotomic search have no equivalent and are rejected. Multi-bin-
+    // type variable-sized bin packing is also rejected: tree search is
+    // unavailable there (the VBPP block above forces use_tree_search =
+    // false, and the forward chain cannot choose among bin types), so the
+    // guarantee cannot be honoured. The buddies_complete() retention gate
+    // in better() is already wired, so SSK/SVC/DS parity is a clean
+    // additive follow-up. Reads raw parameters.use_* (like the sets gate)
+    // so it detects the user's explicit choice, not the zeroed locals.
+    if (instance.has_buddies()) {
+        if (instance.objective() == Objective::VariableSizedBinPacking
+                && instance.number_of_bin_types() > 1) {
+            throw std::invalid_argument(
+                    "Buddy instances are not supported with multiple bin "
+                    "types under variable-sized bin packing in v1: tree "
+                    "search (required for the same-plate guarantee) cannot "
+                    "select among bin types here. Use a single bin type.");
+        }
+        if (parameters.use_column_generation
+                || parameters.use_column_generation_2) {
+            throw std::invalid_argument(
+                    "Buddy instances do not support column generation. "
+                    "Use tree search.");
+        }
+        if (parameters.use_sequential_single_knapsack
+                || parameters.use_sequential_value_correction
+                || parameters.use_dichotomic_search) {
+            throw std::invalid_argument(
+                    "Buddy instances only support tree search in v1. "
+                    "Sequential single knapsack, sequential value "
+                    "correction and dichotomic search are not yet "
+                    "supported with buddies.");
+        }
+        use_tree_search = true;
+        use_column_generation = false;
+        use_column_generation_2 = false;
+        use_sequential_single_knapsack = false;
+        use_sequential_value_correction = false;
+        use_dichotomic_search = false;
+    }
+
     if (instance.objective() == Objective::BinPacking) {
         if (instance.number_of_bin_types() == 1
                 && instance.number_of_items() <= 100) {

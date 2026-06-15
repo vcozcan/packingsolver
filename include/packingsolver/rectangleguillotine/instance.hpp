@@ -8,6 +8,7 @@ namespace rectangleguillotine
 {
 
 using SetId = int32_t;
+using BuddyId = int32_t;
 
 enum class CutType { Roadef2018, NonExact, Exact, Homogenous };
 enum class CutOrientation { Horizontal, Vertical, Any };
@@ -299,6 +300,16 @@ struct ItemType
     /** Number of copies forming one sub-group within the set. */
     ItemPos set_size = -1;
 
+    /**
+     * Buddy id to which this item type belongs (-1 if not a buddy).
+     *
+     * All item types sharing a buddy id must be packed on one single bin
+     * (same-plate co-location). Mutually exclusive with set_id and with an
+     * explicit stack_id. The original BUDDY_ID from CSV is preserved here for
+     * output traceability; the solver works on a dense remap.
+     */
+    BuddyId buddy_id = -1;
+
     /*
      * Computed attributes
      */
@@ -412,6 +423,21 @@ public:
 
     /** Get the list of stack_ids belonging to dense set sid. */
     inline const std::vector<StackId>& set_stacks(SetId sid) const { return set_stacks_[sid]; }
+
+    /** Return true iff any buddies are defined. */
+    inline bool has_buddies() const { return has_buddies_; }
+
+    /** Get the dense buddy index of stack s (-1 if not a buddy). */
+    inline BuddyId buddy_id_of_stack(StackId s) const { return buddy_id_per_stack_[s]; }
+
+    /** Get the number of buddy groups (dense count). */
+    inline BuddyId number_of_buddies() const { return number_of_buddies_; }
+
+    /** Get the list of stack_ids belonging to dense buddy group bid. */
+    inline const std::vector<StackId>& buddy_stacks(BuddyId bid) const { return buddy_stacks_[bid]; }
+
+    /** Get the total number of item copies in dense buddy group bid. */
+    inline ItemPos buddy_total(BuddyId bid) const { return buddy_total_[bid]; }
 
     /** Get the total area of the items. */
     inline Area item_area() const { return item_area_; }
@@ -585,6 +611,25 @@ private:
 
     /** Number of sets (dense count). */
     SetId number_of_sets_ = 0;
+
+    /** Whether any buddies are defined in this instance. */
+    bool has_buddies_ = false;
+
+    /**
+     * For each stack, its dense buddy index (-1 if not a buddy).
+     * Dense index is an internal remapping; the original BUDDY_ID from
+     * CSV is preserved on ItemType::buddy_id for output traceability.
+     */
+    std::vector<BuddyId> buddy_id_per_stack_;
+
+    /** For each dense buddy index, the list of stack_ids belonging to it. */
+    std::vector<std::vector<StackId>> buddy_stacks_;
+
+    /** For each dense buddy index, the total number of item copies in it. */
+    std::vector<ItemPos> buddy_total_;
+
+    /** Number of buddy groups (dense count). */
+    BuddyId number_of_buddies_ = 0;
 
     /** Total item area. */
     Area item_area_ = 0;
