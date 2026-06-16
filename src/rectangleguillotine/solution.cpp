@@ -324,6 +324,15 @@ void Solution::update_indicators(
     // check lives in buddies_feasible(). This is independent defense-in-
     // depth: it also catches SolutionBuilder / future-algorithm output
     // that the branching-scheme new-bin guard never saw. Flags only.
+    //
+    // CONTRACT: buddy_bins_ accumulates across update_indicators() calls and
+    // is never reset, which is correct for the single forward pass that
+    // builds a solution one bin at a time. It must NOT be fed an append-based
+    // merge of buddy sub-solutions: appending one group's pieces under two
+    // different bin_pos values would set size() > 1 and flip feasible_
+    // irrecoverably. Today no such path exists (CG/SSK/SVC/DS are gated off
+    // for buddies in optimize.cpp; tree search uses SolutionBuilder); any
+    // future non-TS buddy parity must respect this.
     if (instance().has_buddies()) {
         for (const SolutionNode& node: bin.nodes) {
             if (node.d < 1 || node.item_type_id < 0)
@@ -335,6 +344,15 @@ void Solution::update_indicators(
             // ItemType::buddy_id keeps the original (possibly sparse) CSV
             // value; the dense id lives on the stack.
             BuddyId g = instance().buddy_id_of_stack(item_type.stack_id);
+            // Defensive: g is in [0, number_of_buddies()) by construction (a
+            // buddy item's stack carries a valid dense id). Guard anyway so an
+            // inconsistent/partially-built state can never index buddy_bins_
+            // out of bounds — flag infeasible and skip instead.
+            if (g < 0 || g >= (BuddyId)buddy_bins_.size()) {
+                buddies_feasible_ = false;
+                feasible_ = false;
+                continue;
+            }
             buddy_bins_[g].insert(bin_pos);
             if (buddy_bins_[g].size() > 1 || bin.copies > 1) {
                 buddies_feasible_ = false;
@@ -437,10 +455,13 @@ void Solution::append(
 
 bool Solution::operator<(const Solution& solution) const
 {
-    // Check feasibility.
-    if (!solution.feasible_)
+    // Check feasibility. feasible() folds in end-state buddy completeness: a
+    // partial buddy group is infeasible even when the per-bin flags never
+    // tripped (the group sits on one bin but isn't fully placed), so the raw
+    // feasible_ member alone could prefer such a solution.
+    if (!solution.feasible())
         return false;
-    if (!feasible_)
+    if (!feasible())
         return true;
 
     switch (instance().objective()) {

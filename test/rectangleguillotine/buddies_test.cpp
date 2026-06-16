@@ -7,6 +7,8 @@
 #include <gtest/gtest.h>
 #include <boost/filesystem.hpp>
 
+#include <string>
+
 using namespace packingsolver;
 using namespace packingsolver::rectangleguillotine;
 namespace fs = boost::filesystem;
@@ -24,6 +26,25 @@ InstanceBuilder buddies_instance_builder(
     instance_builder.set_number_of_stages(3);
     instance_builder.set_cut_type(CutType::NonExact);
     return instance_builder;
+}
+
+// build() throws std::invalid_argument from ~30 distinct checks, so asserting
+// only the exception *type* lets an unrelated guard satisfy a test. This pins
+// the specific check by requiring a substring of its message, so each
+// validation test verifies that its own check actually fired.
+void expect_build_throws_with(
+        InstanceBuilder& instance_builder,
+        const std::string& needle)
+{
+    try {
+        instance_builder.build();
+        ADD_FAILURE() << "expected std::invalid_argument containing \""
+                      << needle << "\", but build() did not throw.";
+    } catch (const std::invalid_argument& e) {
+        EXPECT_NE(std::string(e.what()).find(needle), std::string::npos)
+                << "exception message did not contain \"" << needle
+                << "\": " << e.what();
+    }
 }
 
 }
@@ -175,7 +196,7 @@ TEST(RectangleGuillotineBuddies, NegativeBuddyId)
     instance_builder.set_last_item_type_buddy(-2);  // negative but not -1
     instance_builder.add_bin_type(6000, 3210);
 
-    EXPECT_THROW(instance_builder.build(), std::invalid_argument);
+    expect_build_throws_with(instance_builder, "negative BUDDY_ID");
 }
 
 TEST(RectangleGuillotineBuddies, SingletonGroupRejected)
@@ -186,7 +207,7 @@ TEST(RectangleGuillotineBuddies, SingletonGroupRejected)
     instance_builder.set_last_item_type_buddy(0);
     instance_builder.add_bin_type(6000, 3210);
 
-    EXPECT_THROW(instance_builder.build(), std::invalid_argument);
+    expect_build_throws_with(instance_builder, "at least 2");
 }
 
 TEST(RectangleGuillotineBuddies, GroupTooBigByArea)
@@ -201,7 +222,7 @@ TEST(RectangleGuillotineBuddies, GroupTooBigByArea)
     instance_builder.set_last_item_type_buddy(0);
     instance_builder.add_bin_type(6000, 3210);
 
-    EXPECT_THROW(instance_builder.build(), std::invalid_argument);
+    expect_build_throws_with(instance_builder, "largest usable bin area");
 }
 
 TEST(RectangleGuillotineBuddies, GroupTooBigByAreaWithTrims)
@@ -225,7 +246,7 @@ TEST(RectangleGuillotineBuddies, GroupTooBigByAreaWithTrims)
             0, TrimType::Hard,      // bottom
             0, TrimType::Soft);     // top
 
-    EXPECT_THROW(instance_builder.build(), std::invalid_argument);
+    expect_build_throws_with(instance_builder, "largest usable bin area");
 }
 
 TEST(RectangleGuillotineBuddies, MutualExclusionStillRejectedAfterCopySupport)
@@ -426,6 +447,54 @@ TEST(RectangleGuillotineBuddies, GroupForcedAcrossBinsDroppedUnderKnapsack)
     EXPECT_EQ(best.item_copies(0), 0);
     EXPECT_EQ(best.item_copies(1), 0);
     EXPECT_TRUE(best.buddies_feasible());
+    // ...but the free filler (item 2, profit 250000) MUST be placed; this
+    // distinguishes "group correctly dropped" from "solver returned nothing"
+    // (an empty solution would also satisfy the three assertions above).
+    EXPECT_EQ(best.item_copies(2), 1);
+}
+
+TEST(RectangleGuillotineBuddies, CoLocatesUnderBinPressureMultiPlate)
+{
+    // End-to-end co-location when MORE THAN ONE physical plate is available
+    // and the group is NOT structurally confined to one plate. The earlier
+    // optimize() tests (SingleGroupCoLocates, MultiRowAndCopiesGroupsCoLocate,
+    // TreeSearchSolvesBuddies) all pack on a single plate, so co-location is
+    // free there and the guard/certificate are never actually exercised.
+    //
+    // Here: 6 equal 2000x3210 items, 3 per 6000x3210 plate, 2 plates. A
+    // bin-optimal 2-plate packing could split the buddy group (member A plus
+    // two free on plate 0, member B plus two free on plate 1). The new-bin
+    // guard + the certificate keep the two members on one plate; we assert
+    // both land on the same bin index (and the job is still full).
+    InstanceBuilder instance_builder = buddies_instance_builder(Objective::BinPacking);
+    instance_builder.add_item_type(2000, 3210, -1, 1);   // group member A (item type 0)
+    instance_builder.set_last_item_type_buddy(0);
+    instance_builder.add_item_type(2000, 3210, -1, 1);   // group member B (item type 1)
+    instance_builder.set_last_item_type_buddy(0);
+    instance_builder.add_item_type(2000, 3210, -1, 4);   // 4 free fillers (item type 2)
+    instance_builder.add_bin_type(6000, 3210, -1, 2);    // two physical plates
+    Instance instance = instance_builder.build();
+
+    OptimizeParameters optimize_parameters = not_anytime_parameters();
+    auto output = optimize(instance, optimize_parameters);
+
+    const Solution& best = output.solution_pool.best();
+    EXPECT_EQ(best.number_of_items(), instance.number_of_items());  // full placement
+    EXPECT_TRUE(best.feasible());
+    EXPECT_TRUE(best.buddies_feasible());
+
+    // Both group members must sit on the same physical plate (bin index).
+    auto bin_of = [&](ItemTypeId item_type_id) -> int {
+        for (BinPos b = 0; b < best.number_of_different_bins(); ++b)
+            for (const SolutionNode& node: best.bin(b).nodes)
+                if (node.item_type_id == item_type_id)
+                    return (int)b;
+        return -1;
+    };
+    int bin_a = bin_of(0);
+    int bin_b = bin_of(1);
+    EXPECT_NE(bin_a, -1);
+    EXPECT_EQ(bin_a, bin_b);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -500,6 +569,9 @@ TEST(RectangleGuillotineBuddies, CertificatePartialGroupInfeasible)
     Solution solution = solution_builder.build();
 
     EXPECT_FALSE(solution.buddies_feasible());
+    // A partial group must also make the solution infeasible overall, so the
+    // comparison (operator<) cannot prefer it (feasible() folds this in).
+    EXPECT_FALSE(solution.feasible());
 }
 
 TEST(RectangleGuillotineBuddies, CertificateReplicatedHostInfeasible)
@@ -605,6 +677,35 @@ TEST(RectangleGuillotineBuddies, CertificateSparseIdsDenseIndexing)
 
     // Group 99999 spans two bins → infeasible.
     EXPECT_FALSE(solution.buddies_feasible());
+}
+
+TEST(RectangleGuillotineBuddies, CertificateSparseIdCoLocatedFeasible)
+{
+    // Positive companion to CertificateSparseIdsDenseIndexing: a single group
+    // with a large sparse id (99999), fully co-located on one bin. The checker
+    // sizes its state by number_of_buddies() and must index through the dense
+    // buddy_id_of_stack(); asserting feasible here pins that dense mapping (a
+    // naive buddy_bins_[99999] would be out of range, never feasible), so the
+    // suite no longer relies only on the negative (spans-two-bins) case.
+    InstanceBuilder instance_builder = buddies_instance_builder();
+    instance_builder.add_item_type(1000, 500, -1, 1);
+    instance_builder.set_last_item_type_buddy(99999);
+    instance_builder.add_item_type(1000, 500, -1, 1);
+    instance_builder.set_last_item_type_buddy(99999);
+    instance_builder.add_bin_type(6000, 3210);
+    Instance instance = instance_builder.build();
+
+    SolutionBuilder solution_builder(instance);
+    solution_builder.add_bin(0, 1, CutOrientation::Vertical);
+    solution_builder.add_node(1, 1000);
+    solution_builder.add_node(2, 500);
+    solution_builder.set_last_node_item(0);
+    solution_builder.add_node(2, 1000);
+    solution_builder.set_last_node_item(1);
+    Solution solution = solution_builder.build();
+
+    EXPECT_TRUE(solution.buddies_feasible());
+    EXPECT_TRUE(solution.feasible());
 }
 
 ////////////////////////////////////////////////////////////////////////////////

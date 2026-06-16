@@ -496,12 +496,18 @@ void InstanceBuilder::add_item_type(
 
 void InstanceBuilder::set_last_item_type_set(SetId set_id, ItemPos set_size)
 {
+    if (instance_.item_types_.empty())
+        throw std::logic_error(
+                FUNC_SIGNATURE + ": no item type to set set_id/set_size on.");
     instance_.item_types_.back().set_id = set_id;
     instance_.item_types_.back().set_size = set_size;
 }
 
 void InstanceBuilder::set_last_item_type_buddy(BuddyId buddy_id)
 {
+    if (instance_.item_types_.empty())
+        throw std::logic_error(
+                FUNC_SIGNATURE + ": no item type to set buddy_id on.");
     instance_.item_types_.back().buddy_id = buddy_id;
 }
 
@@ -1156,6 +1162,10 @@ Instance InstanceBuilder::build()
         }
     }
 
+    // bin_types_area_max is consumed by the buddy area precheck below and by
+    // the item-type attribute loop further down; compute it once.
+    Area bin_types_area_max = compute_bin_types_area_max();
+
     // --- Buddies: populate per-stack metadata with dense indices ---
     // item_type.buddy_id is NOT modified — it keeps the original CSV
     // value for output traceability.  The dense remapping is stored only
@@ -1196,34 +1206,46 @@ Instance InstanceBuilder::build()
             }
         }
 
-        // Infeasibility precheck (necessary condition): every buddy group
-        // must fit on a single bin.  Area is rotation-invariant, so if the
+        // Infeasibility precheck (necessary condition) for objectives that
+        // require placing every item.  Area is rotation-invariant, so if a
         // group's total item area exceeds the largest usable (trimmed) bin
-        // area, no co-located packing can exist and the whole job is
-        // infeasible under the hard same-plate guarantee.  BinType::area()
-        // (all trims subtracted) is the correct bound: piece placement is
-        // confined to the trimmed area for every trim type — soft trims
-        // only relax min_waste and let the trailing leftover overhang, they
-        // do not move pieces into the trim band (verified empirically).
-        // This is necessary, not sufficient (guillotine/aspect/defects can
-        // still make a group unfittable — that surfaces as solver
-        // no-solution).
-        Area bin_types_area_max_buddy = compute_bin_types_area_max();
-        for (BuddyId bid = 0; bid < instance_.number_of_buddies_; ++bid) {
-            if (buddy_area[bid] > bin_types_area_max_buddy) {
-                throw std::invalid_argument(
-                        "buddy group " + std::to_string(dense_to_original[bid])
-                        + " has total item area " + std::to_string(buddy_area[bid])
-                        + " which exceeds the largest usable bin area ("
-                        + std::to_string(bin_types_area_max_buddy)
-                        + "); the group cannot fit on a single plate, so the"
-                        " job is infeasible under the same-plate guarantee.");
+        // area, no co-located packing can exist.  BinType::area() (all trims
+        // subtracted) is the correct bound: piece placement is confined to
+        // the trimmed area for every trim type — soft trims only relax
+        // min_waste and let the trailing leftover overhang, they do not move
+        // pieces into the trim band (verified empirically).  This is
+        // necessary, not sufficient (guillotine/aspect/defects can still make
+        // a group unfittable — that surfaces as solver no-solution).
+        //
+        // Profit-driven objectives (Knapsack, Default) may legitimately drop
+        // an over-large buddy group and still pack the rest, so a group that
+        // cannot fit one plate does NOT make the whole instance infeasible
+        // there — the search omits the group (the all-or-nothing guarantee
+        // still holds: a group is placed in full and co-located, or not at
+        // all).  Only full-placement objectives turn it into a build-time
+        // rejection.
+        switch (instance_.objective()) {
+        case Objective::Knapsack:
+        case Objective::Default:
+            break;
+        default:
+            for (BuddyId bid = 0; bid < instance_.number_of_buddies_; ++bid) {
+                if (buddy_area[bid] > bin_types_area_max) {
+                    throw std::invalid_argument(
+                            "buddy group " + std::to_string(dense_to_original[bid])
+                            + " has total item area " + std::to_string(buddy_area[bid])
+                            + " which exceeds the largest usable bin area ("
+                            + std::to_string(bin_types_area_max)
+                            + "); the group cannot fit on a single plate, so the"
+                            " job is infeasible under the same-plate guarantee.");
+                }
             }
+            break;
         }
     }
 
-    // Compute item type attributes.
-    Area bin_types_area_max = compute_bin_types_area_max();
+    // Compute item type attributes. (bin_types_area_max was computed once,
+    // above the buddy block, and is reused here.)
     instance_.all_item_types_infinite_copies_ = true;
     instance_.all_item_types_oriented_ = true;
     for (ItemTypeId item_type_id = 0;

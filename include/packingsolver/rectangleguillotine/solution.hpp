@@ -146,7 +146,11 @@ public:
 
     bool cut_through_defects_feasible() const { return cut_through_defects_feasible_; }
 
-    bool feasible() const { return feasible_; }
+    // feasible() folds in buddies_feasible() so end-state buddy completeness
+    // (a group fully placed-and-co-located, or entirely absent) is part of
+    // overall feasibility. buddies_feasible() short-circuits to true for
+    // non-buddy instances, so this is O(1) in the common case.
+    bool feasible() const { return feasible_ && buddies_feasible(); }
 
     /*
      * Getters: bins

@@ -64,6 +64,17 @@ When `write()` exports a buddy-enabled instance, the CSV header appends
 `BUDDY_ID` (independently of `SET_ID`/`SET_SIZE`, so all four combinations of
 the two features are produced). Non-buddy items get `-1`.
 
+> **Not round-trippable (by design, shared with sets).** `write()` emits the
+> *materialized* `STACK_ID` (`build()` gives every buddy/set item its own
+> singleton stack) alongside `BUDDY_ID`. Re-reading that file would trip the
+> `BUDDY_ID`-vs-explicit-`STACK_ID` mutual-exclusion check, because a
+> freshly-read row is not in the internal-copy exemption set. This export is a
+> diagnostic dump, not a re-ingestible format — nothing in the project reads
+> `write()` output back (the solver pipeline writes its CSV elsewhere). Sets
+> have the identical limitation. If a round-trip is ever needed, emit the user
+> sentinel (`-1`) for auto-materialized stacks, or teach the reader to accept a
+> materialized `STACK_ID` on grouped rows.
+
 ## Constraint Semantics
 
 ### Same-plate co-location
