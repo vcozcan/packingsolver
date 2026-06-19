@@ -13,7 +13,8 @@ target_sources(PackingSolver_rectangleguillotine_test PRIVATE
     branching_scheme/per_bin_minimum_test.cpp
     column_generation_2_test.cpp
     sets_test.cpp
-    buddies_test.cpp)
+    buddies_test.cpp
+    trim_breaking_distance_test.cpp)
 target_include_directories(PackingSolver_rectangleguillotine_test PRIVATE
     ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(PackingSolver_rectangleguillotine_test
