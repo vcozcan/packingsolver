@@ -2,6 +2,7 @@
 
 #include "optimizationtools/utils/utils.hpp"
 
+#include <algorithm>
 #include <fstream>
 #include <map>
 
@@ -89,14 +90,50 @@ void Solution::update_indicators(
             second_leftover_value_ = (node.r - node.l) * (node.t - node.b);
 
         // Check minimum waste length (per-bin override resolved via effective_*).
+        //
+        // Soft trims need special handling here, mirroring the search-side
+        // treatment in branching_scheme.cpp (the discount at ~1062-1066 / 1157-1162):
+        //  - The soft-trim *band* itself (the strip the builder lays down at the real
+        //    plate border, node.l==0 / node.b==0) is reserved border the user asked
+        //    for, NOT a cut-waste sliver the rule guards against -> exempt that axis.
+        //    Otherwise a band of width (trim - cut_thickness) < min_waste would
+        //    wrongly flag the whole solution infeasible (Issue #1, BD > soft trim).
+        //  - Usable waste *abutting* a soft trim (its near edge sits exactly on the
+        //    trim line, node.l==left_trim / node.b==bottom_trim) may legally be
+        //    smaller than min_waste, because trim + waste together form one
+        //    contiguous breakable border -> discount that axis by the trim.
+        // Hard trims reconstruct at d==-1 and never reach this d>=1 check, so they
+        // are unaffected. Right/top soft trims are absorbed into the trailing
+        // leftover and not emitted as bands (see solve.py V2 / plan gate G3).
         if (node.d >= 1
                 && node.item_type_id < 0) {
             Length min_waste = effective_minimum_waste_length(
                     bin_type, instance().parameters());
-            if ((node.r - node.l < min_waste)
-                    || (node.t - node.b < min_waste)) {
-                std::cout << "minimum_waste_length_feasible_ = false" << std::endl;
-                std::cout << "bin_pos " << bin_pos << " node " << node << std::endl;
+
+            Length min_waste_x = min_waste;
+            bool exempt_x = false;
+            if (bin_type.left_trim_type == TrimType::Soft
+                    && bin_type.left_trim > 0) {
+                if (node.l == 0) {
+                    exempt_x = true;  // left trim band
+                } else if (node.l == bin_type.left_trim) {
+                    min_waste_x = std::max(Length(0), min_waste - bin_type.left_trim);
+                }
+            }
+
+            Length min_waste_y = min_waste;
+            bool exempt_y = false;
+            if (bin_type.bottom_trim_type == TrimType::Soft
+                    && bin_type.bottom_trim > 0) {
+                if (node.b == 0) {
+                    exempt_y = true;  // bottom trim band
+                } else if (node.b == bin_type.bottom_trim) {
+                    min_waste_y = std::max(Length(0), min_waste - bin_type.bottom_trim);
+                }
+            }
+
+            if ((!exempt_x && node.r - node.l < min_waste_x)
+                    || (!exempt_y && node.t - node.b < min_waste_y)) {
                 minimum_waste_length_feasible_ = false;
                 feasible_ = false;
             }
@@ -361,13 +398,22 @@ void Solution::update_indicators(
         }
     }
 
-    if (!minimum_waste_length_feasible()) {
-        for (const SolutionNode& node: bin.nodes) {
-            std::cout << node << std::endl;
-        }
-        write("solution_rectangleguillotine.csv");
-        exit(1);
-    }
+    // NOTE: the previous code did exit(1) here, which a library must never do.
+    // minimum_waste_length_feasible_ / feasible_ are set above; how an infeasible
+    // solution is prevented from being RETURNED depends on the path that built it:
+    //  - tree-search reconstruction (BranchingScheme::to_solution) re-checks the
+    //    flag and throws std::logic_error (an invariant tripwire that unwinds
+    //    without terminating the process);
+    //  - append-assembled solutions (column generation / sequential value
+    //    correction / single knapsack / dichotomic search build via
+    //    SolutionBuilder::build() + Solution::append() and never call
+    //    to_solution): no throw fires, but Solution::operator< gates on
+    //    feasible(), so an infeasible candidate is ranked worst and dropped by
+    //    the SolutionPool (which always retains the feasible empty seed). Worst
+    //    case there is a silently-omitted partial result, never a returned
+    //    infeasible certificate.
+    // With the soft-trim handling above, valid jobs no longer trip the flag, so
+    // neither guard fires in normal operation.
 }
 
 bool Solution::sets_complete() const
