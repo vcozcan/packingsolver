@@ -1283,10 +1283,44 @@ Instance InstanceBuilder::build()
     // Compute bin type attributes.
     instance_.bins_area_sum_ = 0;
     Area previous_bins_area = 0;
+    // A positive SOFT left/bottom trim is reconstructed as a waste band of width
+    // (trim - cut_thickness) in branching_scheme.cpp to_solution(). When the trim
+    // is not strictly greater than the cut thickness that width is <= 0, so
+    // SolutionBuilder::add_node throws an opaque "'cut_position' is too small"
+    // deep in reconstruction (and only after a full search). Reject it up front
+    // with an actionable message. Hard trims are immune (they reconstruct at
+    // d == -1 with no cut-thickness subtraction); right/top soft trims never emit
+    // a band (they are absorbed into the trailing leftover), so only left and
+    // bottom are checked here.
+    const Length cut_thickness = instance_.parameters().cut_thickness;
     for (BinTypeId bin_type_id = 0;
             bin_type_id < instance_.number_of_bin_types();
             ++bin_type_id) {
         const BinType& bin_type = instance_.bin_type(bin_type_id);
+        if (bin_type.left_trim_type == TrimType::Soft
+                && bin_type.left_trim > 0
+                && bin_type.left_trim <= cut_thickness) {
+            throw std::invalid_argument(
+                    FUNC_SIGNATURE + ": "
+                    "bin type " + std::to_string(bin_type_id)
+                    + " has a soft left_trim (" + std::to_string(bin_type.left_trim)
+                    + ") that is not greater than the cut thickness ("
+                    + std::to_string(cut_thickness) + "); a soft trim must be either 0"
+                    " or strictly greater than the cut thickness, otherwise the reserved"
+                    " trim band has non-positive width and cannot be cut.");
+        }
+        if (bin_type.bottom_trim_type == TrimType::Soft
+                && bin_type.bottom_trim > 0
+                && bin_type.bottom_trim <= cut_thickness) {
+            throw std::invalid_argument(
+                    FUNC_SIGNATURE + ": "
+                    "bin type " + std::to_string(bin_type_id)
+                    + " has a soft bottom_trim (" + std::to_string(bin_type.bottom_trim)
+                    + ") that is not greater than the cut thickness ("
+                    + std::to_string(cut_thickness) + "); a soft trim must be either 0"
+                    " or strictly greater than the cut thickness, otherwise the reserved"
+                    " trim band has non-positive width and cannot be cut.");
+        }
         // Update bin_type.copies.
         if (bin_type.copies == -1)
             instance_.bin_types_[bin_type_id].copies = instance_.number_of_items();

@@ -8,6 +8,51 @@
 using namespace packingsolver;
 using namespace packingsolver::rectangleguillotine;
 
+namespace
+{
+
+/// Minimum-waste-length check for ONE axis of a node, accounting for soft trims
+/// so that validation agrees with what the search legitimately produces (the
+/// search applies the same trim-adjacent discount in branching_scheme.cpp):
+///  - The reserved soft-trim BAND (abuts the border at coordinate 0 AND ends at
+///    trim - cut_thickness, the exact width the builder lays down) is reserved
+///    border the user asked for, NOT a cut-waste sliver the rule guards against
+///    -> always satisfied. Otherwise the band (width < min_waste) would wrongly
+///    flag the whole solution infeasible (Issue #1, breaking distance > trim).
+///  - Usable waste ABUTTING a soft trim (its near edge on the trim line) shares
+///    one contiguous breakable border with the trim -> discount the threshold
+///    via minimum_waste_length_adjacent_to_soft_trim, the shared source of truth
+///    the search uses too (so the two can never silently drift apart).
+/// Both relaxations are gated on is_waste_node (item_type_id == -1): a -2 cut
+/// separator or -3 residual node that happens to land on these coordinates stays
+/// under the full check. The band exemption additionally keys on the band's far
+/// edge (not coordinate 0 alone), so a non-band sub-min_waste border waste also
+/// stays under the full check on the SolutionBuilder::read / append paths
+/// (optimize() only ever emits the band there). The x and y axes differ only by
+/// which coordinates/trim are passed, so they share this code — the copy-paste
+/// is exactly how the swapped-axis bug class (Issue #2) recurs.
+bool axis_min_waste_satisfied(
+        bool is_waste_node,
+        TrimType trim_type,
+        Length trim,
+        Length near_coord,
+        Length far_coord,
+        Length min_waste,
+        Length cut_thickness)
+{
+    Length extent = far_coord - near_coord;
+    if (is_waste_node && trim_type == TrimType::Soft && trim > 0) {
+        if (near_coord == 0 && far_coord == trim - cut_thickness)
+            return true;  // reserved trim band
+        if (near_coord == trim)  // usable waste abutting the soft trim
+            return extent >= minimum_waste_length_adjacent_to_soft_trim(
+                    min_waste, trim);
+    }
+    return extent >= min_waste;
+}
+
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////// Node /////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////
@@ -89,14 +134,27 @@ void Solution::update_indicators(
             second_leftover_value_ = (node.r - node.l) * (node.t - node.b);
 
         // Check minimum waste length (per-bin override resolved via effective_*).
+        // Per-axis, with soft-trim band exemption + trim-adjacent discount folded
+        // into axis_min_waste_satisfied (see its doc). Hard trims reconstruct at
+        // d==-1 and never reach this d>=1 check; right/top soft trims are absorbed
+        // into the trailing leftover and never emitted as bands.
         if (node.d >= 1
                 && node.item_type_id < 0) {
             Length min_waste = effective_minimum_waste_length(
                     bin_type, instance().parameters());
-            if ((node.r - node.l < min_waste)
-                    || (node.t - node.b < min_waste)) {
-                std::cout << "minimum_waste_length_feasible_ = false" << std::endl;
-                std::cout << "bin_pos " << bin_pos << " node " << node << std::endl;
+            Length cut_thickness = instance().parameters().cut_thickness;
+            // Trims are read raw: there is no per-bin effective_* trim override
+            // today (unlike minimum_waste_length above). If one is ever added,
+            // route both calls through it for symmetry.
+            bool is_waste_node = (node.item_type_id == -1);
+            if (!axis_min_waste_satisfied(
+                        is_waste_node,
+                        bin_type.left_trim_type, bin_type.left_trim,
+                        node.l, node.r, min_waste, cut_thickness)
+                    || !axis_min_waste_satisfied(
+                        is_waste_node,
+                        bin_type.bottom_trim_type, bin_type.bottom_trim,
+                        node.b, node.t, min_waste, cut_thickness)) {
                 minimum_waste_length_feasible_ = false;
                 feasible_ = false;
             }
@@ -361,13 +419,26 @@ void Solution::update_indicators(
         }
     }
 
-    if (!minimum_waste_length_feasible()) {
-        for (const SolutionNode& node: bin.nodes) {
-            std::cout << node << std::endl;
-        }
-        write("solution_rectangleguillotine.csv");
-        exit(1);
-    }
+    // NOTE: the previous code did exit(1) here, which a library must never do.
+    // minimum_waste_length_feasible_ / feasible_ are set above; how an infeasible
+    // solution is prevented from being RETURNED depends on the path that built it:
+    //  - tree-search reconstruction (BranchingScheme::to_solution) re-checks the
+    //    flag and throws std::logic_error (an invariant tripwire that unwinds
+    //    without terminating the process);
+    //  - append-assembled solutions (column generation / sequential value
+    //    correction / single knapsack / dichotomic search build via
+    //    SolutionBuilder::build() + Solution::append() and never call
+    //    to_solution): no throw fires, but Solution::operator< gates on
+    //    feasible(), so an infeasible candidate is ranked worst and dropped by
+    //    the SolutionPool (which always retains the feasible empty seed). Worst
+    //    case there is a silently-omitted partial result, never a returned
+    //    infeasible certificate.
+    // With the soft-trim handling above, valid jobs no longer trip the flag, so
+    // neither guard fires in normal operation. NOTE for callers: a GENUINELY
+    // infeasible non-empty instance (no feasible packing exists at all) therefore
+    // surfaces on the append path as best() == the empty seed (0 bins) with a
+    // clean exit, NOT as an error. If you need infeasibility signalled, treat
+    // "0 bins for a non-empty instance" as infeasible at the call site.
 }
 
 bool Solution::sets_complete() const

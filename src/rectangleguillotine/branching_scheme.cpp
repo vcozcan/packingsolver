@@ -1062,7 +1062,9 @@ void BranchingScheme::insertion_1_item(
             Length min_waste = effective_minimum_waste_length(bin_type, instance.parameters());
             if (df <= 0)  // y1_prev is the bottom trim.
                 if (bin_type.bottom_trim_type == TrimType::Soft)
-                    min_waste = std::max(Length(0), min_waste - bin_type.bottom_trim);
+                    // Shared source of truth with the validator (solution.cpp).
+                    min_waste = minimum_waste_length_adjacent_to_soft_trim(
+                            min_waste, bin_type.bottom_trim);
             insertion.y2 += min_waste;
             insertion.z2 = 1;
         } else {
@@ -1779,9 +1781,17 @@ Solution BranchingScheme::to_solution(
                     cut_orientation);
 
             const BinType& bin_type = instance().bin_type(bin_type_id);
-            if (bin_type.left_trim_type == TrimType::Soft
-                    && bin_type.left_trim > 0) {
-                solution_builder.add_node(1, bin_type.left_trim - cut_thickness);
+            // depth-1 carries the left trim under a vertical first cut, but the
+            // BOTTOM trim under a horizontal first cut: add_node maps depth->axis
+            // by cut_orientation, so a fixed (left@1, bottom@2) assignment puts
+            // asymmetric soft trims on swapped axes under horizontal (Issue #2).
+            Length d1_trim = (cut_orientation == CutOrientation::Vertical)?
+                bin_type.left_trim: bin_type.bottom_trim;
+            TrimType d1_trim_type = (cut_orientation == CutOrientation::Vertical)?
+                bin_type.left_trim_type: bin_type.bottom_trim_type;
+            if (d1_trim_type == TrimType::Soft
+                    && d1_trim > 0) {
+                solution_builder.add_node(1, d1_trim - cut_thickness);
             }
         }
 
@@ -1801,9 +1811,19 @@ Solution BranchingScheme::to_solution(
 
                 BinTypeId bin_type_id = instance().bin_type_id(number_of_bins - 1);
                 const BinType& bin_type = instance().bin_type(bin_type_id);
-                if (bin_type.bottom_trim_type == TrimType::Soft
-                        && bin_type.bottom_trim > 0) {
-                    solution_builder.add_node(2, bin_type.bottom_trim - cut_thickness);
+                // This block is 3-stage only (guarded above), so cut_orientation
+                // is the first-stage orientation directly (always concrete here —
+                // Vertical/Horizontal, never Any). depth-2 carries the bottom trim
+                // under a vertical first cut, but the LEFT trim under a horizontal
+                // first cut (mirror of the depth-1 swap above, Issue #2).
+                CutOrientation cut_orientation = current_node->first_stage_orientation;
+                Length d2_trim = (cut_orientation == CutOrientation::Vertical)?
+                    bin_type.bottom_trim: bin_type.left_trim;
+                TrimType d2_trim_type = (cut_orientation == CutOrientation::Vertical)?
+                    bin_type.bottom_trim_type: bin_type.left_trim_type;
+                if (d2_trim_type == TrimType::Soft
+                        && d2_trim > 0) {
+                    solution_builder.add_node(2, d2_trim - cut_thickness);
                 }
             }
         }

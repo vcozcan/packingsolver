@@ -2,6 +2,8 @@
 
 #include "packingsolver/algorithms/common.hpp"
 
+#include <algorithm>
+
 namespace packingsolver
 {
 namespace rectangleguillotine
@@ -239,6 +241,26 @@ inline Length effective_minimum_waste_length(
     return (bin_type.minimum_waste_length >= 0)
         ? bin_type.minimum_waste_length
         : parameters.minimum_waste_length;
+}
+
+/**
+ * Minimum waste length required for a waste strip whose near edge abuts a SOFT
+ * trim of the given size.
+ *
+ * The trim and the strip share one contiguous breakable border, so the strip
+ * may fall short of the full minimum waste length by the trim width (clamped at
+ * 0). This is the SINGLE SOURCE OF TRUTH for the trim-adjacent discount used by
+ * both the search (branching_scheme.cpp) and the validator (solution.cpp): the
+ * two must agree, or a layout the search legitimately produces is rejected by
+ * validation (Issue #1, breaking distance > trim). The std::max clamp is kept
+ * explicit for readers; Length is signed (int64_t), so the bare subtraction
+ * would already be equivalent.
+ */
+inline Length minimum_waste_length_adjacent_to_soft_trim(
+        Length minimum_waste_length,
+        Length trim)
+{
+    return std::max(Length(0), minimum_waste_length - trim);
 }
 
 /**
