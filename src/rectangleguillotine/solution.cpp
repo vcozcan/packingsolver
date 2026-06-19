@@ -109,12 +109,20 @@ void Solution::update_indicators(
                 && node.item_type_id < 0) {
             Length min_waste = effective_minimum_waste_length(
                     bin_type, instance().parameters());
+            const Length cut_thickness = instance().parameters().cut_thickness;
 
             Length min_waste_x = min_waste;
             bool exempt_x = false;
             if (bin_type.left_trim_type == TrimType::Soft
                     && bin_type.left_trim > 0) {
-                if (node.l == 0) {
+                // Exempt only the actual reserved band: it abuts x == 0 AND ends
+                // at the band boundary (left_trim - cut_thickness, the width the
+                // builder lays down). Keying on node.l == 0 alone would also
+                // exempt a non-band sub-min_waste border waste on the
+                // SolutionBuilder::read / append paths (unreachable via
+                // optimize(), which only ever emits the band at x == 0).
+                if (node.l == 0
+                        && node.r == bin_type.left_trim - cut_thickness) {
                     exempt_x = true;  // left trim band
                 } else if (node.l == bin_type.left_trim) {
                     min_waste_x = std::max(Length(0), min_waste - bin_type.left_trim);
@@ -125,7 +133,8 @@ void Solution::update_indicators(
             bool exempt_y = false;
             if (bin_type.bottom_trim_type == TrimType::Soft
                     && bin_type.bottom_trim > 0) {
-                if (node.b == 0) {
+                if (node.b == 0
+                        && node.t == bin_type.bottom_trim - cut_thickness) {
                     exempt_y = true;  // bottom trim band
                 } else if (node.b == bin_type.bottom_trim) {
                     min_waste_y = std::max(Length(0), min_waste - bin_type.bottom_trim);

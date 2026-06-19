@@ -1,5 +1,6 @@
 #include "packingsolver/rectangleguillotine/instance_builder.hpp"
 #include "packingsolver/rectangleguillotine/optimize.hpp"
+#include "rectangleguillotine/solution_builder.hpp"
 
 #include <gtest/gtest.h>
 
@@ -506,4 +507,49 @@ TEST(RectangleGuillotineBreakingDistanceTrim, RightTopSubKerfSoftTrimsAccepted)
     const Solution& best = output.solution_pool.best();
     EXPECT_TRUE(best.feasible());
     EXPECT_EQ(best.number_of_items(), 3);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// G2 — the band exemption keys on the band's far edge, not just x == 0 / y == 0.
+// optimize() never emits a non-band waste at the border, but a hand-built /
+// read / appended solution can. Only the exact band (width trim - cut_thickness)
+// is exempt; a wider sub-min_waste border waste stays infeasible.
+////////////////////////////////////////////////////////////////////////////////
+
+TEST(RectangleGuillotineBreakingDistanceTrim, NonBandBorderWasteRejectedOnReadPath)
+{
+    InstanceBuilder instance_builder = bd_trim_instance_builder();
+    instance_builder.set_minimum_waste_length(20);
+    BinTypeId bin_type_id = instance_builder.add_bin_type(6000, 3210);
+    instance_builder.add_trims(
+            bin_type_id,
+            10, TrimType::Soft, 0, TrimType::Soft,   // soft left trim 10, ct == 0
+            0, TrimType::Soft, 0, TrimType::Soft);   // -> band is exactly [0, 10]
+    instance_builder.add_item_type(1000, 3210, -1, 1, true);
+    Instance instance = instance_builder.build();
+
+    // The exact band [0, 10] at x == 0 is exempt -> feasible.
+    {
+        SolutionBuilder solution_builder(instance);
+        solution_builder.add_bin(bin_type_id, 1, CutOrientation::Vertical);
+        solution_builder.add_node(1, 10);          // left trim band [0, 10]
+        solution_builder.add_node(1, 10 + 1000);   // content strip [10, 1010]
+        solution_builder.add_node(2, 3210);
+        solution_builder.set_last_node_item(0);
+        Solution solution = solution_builder.build();
+        EXPECT_TRUE(solution.minimum_waste_length_feasible());
+    }
+    // A wider non-band border waste [0, 15] (15 < min_waste 20, and != band
+    // width 10) at x == 0 is NOT the band -> not exempt -> infeasible. Under the
+    // looser "node.l == 0" exemption this would be wrongly accepted.
+    {
+        SolutionBuilder solution_builder(instance);
+        solution_builder.add_bin(bin_type_id, 1, CutOrientation::Vertical);
+        solution_builder.add_node(1, 15);          // border waste [0, 15], NOT the band
+        solution_builder.add_node(1, 15 + 1000);   // content strip [15, 1015]
+        solution_builder.add_node(2, 3210);
+        solution_builder.set_last_node_item(0);
+        Solution solution = solution_builder.build();
+        EXPECT_FALSE(solution.minimum_waste_length_feasible());
+    }
 }
