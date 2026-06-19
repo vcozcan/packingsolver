@@ -1810,12 +1810,11 @@ Solution BranchingScheme::to_solution(
                 BinTypeId bin_type_id = instance().bin_type_id(number_of_bins - 1);
                 const BinType& bin_type = instance().bin_type(bin_type_id);
                 // This block is 3-stage only (guarded above), so cut_orientation
-                // follows the first-stage orientation directly. depth-2 carries the
-                // bottom trim under a vertical first cut, but the LEFT trim under a
-                // horizontal first cut (mirror of the depth-1 swap above, Issue #2).
-                CutOrientation cut_orientation =
-                    (current_node->first_stage_orientation == CutOrientation::Vertical)?
-                    CutOrientation::Vertical: CutOrientation::Horizontal;
+                // is the first-stage orientation directly (always concrete here —
+                // Vertical/Horizontal, never Any). depth-2 carries the bottom trim
+                // under a vertical first cut, but the LEFT trim under a horizontal
+                // first cut (mirror of the depth-1 swap above, Issue #2).
+                CutOrientation cut_orientation = current_node->first_stage_orientation;
                 Length d2_trim = (cut_orientation == CutOrientation::Vertical)?
                     bin_type.bottom_trim: bin_type.left_trim;
                 TrimType d2_trim_type = (cut_orientation == CutOrientation::Vertical)?

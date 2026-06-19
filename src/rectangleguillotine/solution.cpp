@@ -9,6 +9,44 @@
 using namespace packingsolver;
 using namespace packingsolver::rectangleguillotine;
 
+namespace
+{
+
+/// Minimum-waste-length check for ONE axis of a waste node, accounting for soft
+/// trims (this mirrors the search-side discount in branching_scheme.cpp, so
+/// validation agrees with what the search legitimately produces):
+///  - The reserved soft-trim BAND (abuts the border at coordinate 0 AND ends at
+///    trim - cut_thickness, the exact width the builder lays down) is reserved
+///    border the user asked for, NOT a cut-waste sliver the rule guards against
+///    -> always satisfied. Otherwise the band (width < min_waste) would wrongly
+///    flag the whole solution infeasible (Issue #1, breaking distance > trim).
+///  - Usable waste ABUTTING a soft trim (its near edge on the trim line) shares
+///    one contiguous breakable border with the trim -> discount the threshold.
+/// Keying on the band's far edge (not coordinate 0 alone) keeps a non-band
+/// sub-min_waste border waste under the full check on the SolutionBuilder::read
+/// / append paths (optimize() only ever emits the band there). The x and y axes
+/// differ only by which coordinates/trim are passed, so they share this code —
+/// the copy-paste is exactly how the swapped-axis bug class (Issue #2) recurs.
+bool axis_min_waste_satisfied(
+        TrimType trim_type,
+        Length trim,
+        Length near_coord,
+        Length far_coord,
+        Length min_waste,
+        Length cut_thickness)
+{
+    Length extent = far_coord - near_coord;
+    if (trim_type == TrimType::Soft && trim > 0) {
+        if (near_coord == 0 && far_coord == trim - cut_thickness)
+            return true;  // reserved trim band
+        if (near_coord == trim)  // usable waste abutting the soft trim
+            return extent >= std::max(Length(0), min_waste - trim);
+    }
+    return extent >= min_waste;
+}
+
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////// Node /////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////
@@ -90,59 +128,21 @@ void Solution::update_indicators(
             second_leftover_value_ = (node.r - node.l) * (node.t - node.b);
 
         // Check minimum waste length (per-bin override resolved via effective_*).
-        //
-        // Soft trims need special handling here, mirroring the search-side
-        // treatment in branching_scheme.cpp (the discount at ~1062-1066 / 1157-1162):
-        //  - The soft-trim *band* itself (the strip the builder lays down at the real
-        //    plate border, node.l==0 / node.b==0) is reserved border the user asked
-        //    for, NOT a cut-waste sliver the rule guards against -> exempt that axis.
-        //    Otherwise a band of width (trim - cut_thickness) < min_waste would
-        //    wrongly flag the whole solution infeasible (Issue #1, BD > soft trim).
-        //  - Usable waste *abutting* a soft trim (its near edge sits exactly on the
-        //    trim line, node.l==left_trim / node.b==bottom_trim) may legally be
-        //    smaller than min_waste, because trim + waste together form one
-        //    contiguous breakable border -> discount that axis by the trim.
-        // Hard trims reconstruct at d==-1 and never reach this d>=1 check, so they
-        // are unaffected. Right/top soft trims are absorbed into the trailing
-        // leftover and not emitted as bands (see solve.py V2 / plan gate G3).
+        // Per-axis, with soft-trim band exemption + trim-adjacent discount folded
+        // into axis_min_waste_satisfied (see its doc). Hard trims reconstruct at
+        // d==-1 and never reach this d>=1 check; right/top soft trims are absorbed
+        // into the trailing leftover and never emitted as bands.
         if (node.d >= 1
                 && node.item_type_id < 0) {
             Length min_waste = effective_minimum_waste_length(
                     bin_type, instance().parameters());
-            const Length cut_thickness = instance().parameters().cut_thickness;
-
-            Length min_waste_x = min_waste;
-            bool exempt_x = false;
-            if (bin_type.left_trim_type == TrimType::Soft
-                    && bin_type.left_trim > 0) {
-                // Exempt only the actual reserved band: it abuts x == 0 AND ends
-                // at the band boundary (left_trim - cut_thickness, the width the
-                // builder lays down). Keying on node.l == 0 alone would also
-                // exempt a non-band sub-min_waste border waste on the
-                // SolutionBuilder::read / append paths (unreachable via
-                // optimize(), which only ever emits the band at x == 0).
-                if (node.l == 0
-                        && node.r == bin_type.left_trim - cut_thickness) {
-                    exempt_x = true;  // left trim band
-                } else if (node.l == bin_type.left_trim) {
-                    min_waste_x = std::max(Length(0), min_waste - bin_type.left_trim);
-                }
-            }
-
-            Length min_waste_y = min_waste;
-            bool exempt_y = false;
-            if (bin_type.bottom_trim_type == TrimType::Soft
-                    && bin_type.bottom_trim > 0) {
-                if (node.b == 0
-                        && node.t == bin_type.bottom_trim - cut_thickness) {
-                    exempt_y = true;  // bottom trim band
-                } else if (node.b == bin_type.bottom_trim) {
-                    min_waste_y = std::max(Length(0), min_waste - bin_type.bottom_trim);
-                }
-            }
-
-            if ((!exempt_x && node.r - node.l < min_waste_x)
-                    || (!exempt_y && node.t - node.b < min_waste_y)) {
+            Length cut_thickness = instance().parameters().cut_thickness;
+            if (!axis_min_waste_satisfied(
+                        bin_type.left_trim_type, bin_type.left_trim,
+                        node.l, node.r, min_waste, cut_thickness)
+                    || !axis_min_waste_satisfied(
+                        bin_type.bottom_trim_type, bin_type.bottom_trim,
+                        node.b, node.t, min_waste, cut_thickness)) {
                 minimum_waste_length_feasible_ = false;
                 feasible_ = false;
             }

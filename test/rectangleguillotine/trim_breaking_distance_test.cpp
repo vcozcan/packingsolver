@@ -32,6 +32,8 @@ InstanceBuilder bd_trim_instance_builder()
 // the given width — i.e. the left trim band landed on the x-axis at this size.
 bool has_left_band(const Solution& solution, Length width)
 {
+    if (solution.number_of_bins() == 0)
+        return false;
     for (const SolutionNode& node: solution.bin(0).nodes)
         if (node.item_type_id == -1 && node.l == 0 && node.r - node.l == width)
             return true;
@@ -42,6 +44,8 @@ bool has_left_band(const Solution& solution, Length width)
 // i.e. the bottom trim band landed on the y-axis at this size.
 bool has_bottom_band(const Solution& solution, Length height)
 {
+    if (solution.number_of_bins() == 0)
+        return false;
     for (const SolutionNode& node: solution.bin(0).nodes)
         if (node.item_type_id == -1 && node.b == 0 && node.t - node.b == height)
             return true;
@@ -54,6 +58,8 @@ bool has_bottom_band(const Solution& solution, Length height)
 // presence in a FEASIBLE solution proves the discount branch is load-bearing.
 bool has_adjacent_left_subwaste(const Solution& solution, Length left_trim, Length min_waste)
 {
+    if (solution.number_of_bins() == 0)
+        return false;
     for (const SolutionNode& node: solution.bin(0).nodes)
         if (node.item_type_id == -1
                 && node.l == left_trim
