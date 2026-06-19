@@ -61,6 +61,24 @@ bool has_adjacent_left_subwaste(const Solution& solution, Length left_trim, Leng
     return false;
 }
 
+// build() throws std::invalid_argument from many distinct checks, so asserting
+// only the exception *type* lets an unrelated guard satisfy the test. Pin the
+// specific check by requiring a substring of its message.
+void expect_build_throws_with(
+        InstanceBuilder& instance_builder,
+        const std::string& needle)
+{
+    try {
+        instance_builder.build();
+        ADD_FAILURE() << "expected std::invalid_argument containing \""
+                      << needle << "\", but build() did not throw.";
+    } catch (const std::invalid_argument& e) {
+        EXPECT_NE(std::string(e.what()).find(needle), std::string::npos)
+                << "exception message did not contain \"" << needle
+                << "\": " << e.what();
+    }
+}
+
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -361,5 +379,131 @@ TEST(RectangleGuillotineBreakingDistanceTrim, RightTopSoftTrimsNoLeftBottomBand)
     const Solution& best = output.solution_pool.best();
     EXPECT_TRUE(best.feasible());
     EXPECT_TRUE(best.minimum_waste_length_feasible());
+    EXPECT_EQ(best.number_of_items(), 3);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// V-1 — a positive SOFT left/bottom trim no larger than the cut thickness is
+// reconstructed as a band of width (trim - cut_thickness) <= 0, which previously
+// threw an opaque "'cut_position' is too small" deep in to_solution() (and only
+// after a full search). build() now rejects it up front with an actionable
+// message. Hard trims are immune; ct == 0 (the common glass case) is unaffected;
+// a soft trim one unit above the kerf is the smallest representable band.
+////////////////////////////////////////////////////////////////////////////////
+
+TEST(RectangleGuillotineBreakingDistanceTrim, SoftLeftTrimAtCutThicknessRejected)
+{
+    // left_trim == cut_thickness: the band width would be exactly 0 (the tightest
+    // crash, cut_position == 0). Rejected at build().
+    InstanceBuilder instance_builder = bd_trim_instance_builder();
+    instance_builder.set_cut_thickness(3);
+    BinTypeId bin_type_id = instance_builder.add_bin_type(6000, 3210);
+    instance_builder.add_trims(
+            bin_type_id,
+            3, TrimType::Soft, 0, TrimType::Soft,
+            0, TrimType::Soft, 0, TrimType::Soft);
+    instance_builder.add_item_type(1800, 3000, -1, 3, true);
+
+    expect_build_throws_with(instance_builder, "greater than the cut thickness");
+}
+
+TEST(RectangleGuillotineBreakingDistanceTrim, SubKerfSoftBottomTrimRejected)
+{
+    // bottom_trim < cut_thickness: the band width would be negative.
+    InstanceBuilder instance_builder = bd_trim_instance_builder();
+    instance_builder.set_cut_thickness(3);
+    BinTypeId bin_type_id = instance_builder.add_bin_type(6000, 3210);
+    instance_builder.add_trims(
+            bin_type_id,
+            0, TrimType::Soft, 0, TrimType::Soft,
+            2, TrimType::Soft, 0, TrimType::Soft);
+    instance_builder.add_item_type(1800, 3000, -1, 3, true);
+
+    expect_build_throws_with(instance_builder, "greater than the cut thickness");
+}
+
+TEST(RectangleGuillotineBreakingDistanceTrim, SoftTrimJustAboveCutThicknessAccepted)
+{
+    // left_trim = cut_thickness + 1: the smallest representable soft band
+    // (width 1). Must build, solve, and emit the band at (trim - cut_thickness).
+    InstanceBuilder instance_builder = bd_trim_instance_builder();
+    instance_builder.set_cut_thickness(3);
+    BinTypeId bin_type_id = instance_builder.add_bin_type(6000, 3210);
+    instance_builder.add_trims(
+            bin_type_id,
+            4, TrimType::Soft, 0, TrimType::Soft,
+            0, TrimType::Soft, 0, TrimType::Soft);
+    instance_builder.add_item_type(1800, 3000, -1, 3, true);
+    Instance instance = instance_builder.build();
+
+    auto output = optimize(instance, not_anytime_parameters());
+    const Solution& best = output.solution_pool.best();
+    EXPECT_TRUE(best.feasible());
+    EXPECT_EQ(best.number_of_items(), 3);
+    EXPECT_TRUE(has_left_band(best, 4 - 3));  // band width = trim - cut_thickness
+}
+
+TEST(RectangleGuillotineBreakingDistanceTrim, SoftTrimWithZeroCutThicknessAccepted)
+{
+    // The common production config: cut_thickness == 0, so any positive soft trim
+    // is representable (band width = trim). Must never be rejected.
+    InstanceBuilder instance_builder = bd_trim_instance_builder();
+    instance_builder.set_cut_thickness(0);
+    BinTypeId bin_type_id = instance_builder.add_bin_type(6000, 3210);
+    instance_builder.add_trims(
+            bin_type_id,
+            2, TrimType::Soft, 0, TrimType::Soft,
+            2, TrimType::Soft, 0, TrimType::Soft);
+    instance_builder.add_item_type(1800, 3000, -1, 3, true);
+    Instance instance = instance_builder.build();
+
+    auto output = optimize(instance, not_anytime_parameters());
+    const Solution& best = output.solution_pool.best();
+    EXPECT_TRUE(best.feasible());
+    EXPECT_EQ(best.number_of_items(), 3);
+    EXPECT_TRUE(has_left_band(best, 2));
+    EXPECT_TRUE(has_bottom_band(best, 2));
+}
+
+TEST(RectangleGuillotineBreakingDistanceTrim, HardSubKerfTrimAccepted)
+{
+    // Hard trims reconstruct at d == -1 with no cut-thickness subtraction, so a
+    // hard trim <= cut_thickness is immune to the band crash and must NOT be
+    // rejected by the soft-only build() guard.
+    InstanceBuilder instance_builder = bd_trim_instance_builder();
+    instance_builder.set_cut_thickness(3);
+    BinTypeId bin_type_id = instance_builder.add_bin_type(6000, 3210);
+    instance_builder.add_trims(
+            bin_type_id,
+            3, TrimType::Hard, 0, TrimType::Hard,
+            3, TrimType::Hard, 0, TrimType::Hard);
+    instance_builder.add_item_type(1800, 3000, -1, 3, true);
+    Instance instance = instance_builder.build();
+
+    auto output = optimize(instance, not_anytime_parameters());
+    const Solution& best = output.solution_pool.best();
+    EXPECT_TRUE(best.feasible());
+    EXPECT_EQ(best.number_of_items(), 3);
+}
+
+TEST(RectangleGuillotineBreakingDistanceTrim, RightTopSubKerfSoftTrimsAccepted)
+{
+    // Scope guard for the build() check: right/top soft trims are absorbed into
+    // the trailing leftover and never emitted as a (trim - cut_thickness) band,
+    // so a right/top soft trim <= cut_thickness does NOT crash and must NOT be
+    // rejected. Only left/bottom are checked; this pins that asymmetry.
+    InstanceBuilder instance_builder = bd_trim_instance_builder();
+    instance_builder.set_cut_thickness(3);
+    BinTypeId bin_type_id = instance_builder.add_bin_type(6000, 3210);
+    instance_builder.add_trims(
+            bin_type_id,
+            0, TrimType::Soft, 2, TrimType::Soft,   // left=0, right=2 (<= ct)
+            0, TrimType::Soft, 2, TrimType::Soft);  // bottom=0, top=2 (<= ct)
+    instance_builder.add_item_type(1800, 3000, -1, 3, true);
+    Instance instance = instance_builder.build();
+
+    auto output = optimize(instance, not_anytime_parameters());
+    const Solution& best = output.solution_pool.best();
+    EXPECT_TRUE(best.feasible());
     EXPECT_EQ(best.number_of_items(), 3);
 }
