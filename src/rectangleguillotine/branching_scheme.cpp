@@ -1062,7 +1062,9 @@ void BranchingScheme::insertion_1_item(
             Length min_waste = effective_minimum_waste_length(bin_type, instance.parameters());
             if (df <= 0)  // y1_prev is the bottom trim.
                 if (bin_type.bottom_trim_type == TrimType::Soft)
-                    min_waste = std::max(Length(0), min_waste - bin_type.bottom_trim);
+                    // Shared source of truth with the validator (solution.cpp).
+                    min_waste = minimum_waste_length_adjacent_to_soft_trim(
+                            min_waste, bin_type.bottom_trim);
             insertion.y2 += min_waste;
             insertion.z2 = 1;
         } else {

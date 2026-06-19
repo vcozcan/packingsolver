@@ -120,7 +120,11 @@ TEST(RectangleGuillotineBreakingDistanceTrim, BreakingDistanceExceedsSoftTrim)
 
 TEST(RectangleGuillotineBreakingDistanceTrim, BreakingDistanceEqualsSoftTrim)
 {
-    // Boundary: mwl == trim has always worked; keep it working.
+    // Boundary: mwl == trim has always worked; keep it working. NOTE this case
+    // passes through the UNCHANGED `extent >= min_waste` fallthrough (band width
+    // 10 >= mwl 10), so it exercises none of the soft-trim exemption logic it
+    // sits beside — that is covered by BreakingDistanceExceedsSoftTrim. This is
+    // purely the equal-boundary regression guard.
     InstanceBuilder instance_builder = bd_trim_instance_builder();
     instance_builder.set_minimum_waste_length(10);
     BinTypeId bin_type_id = instance_builder.add_bin_type(6000, 3210);
@@ -216,6 +220,14 @@ TEST(RectangleGuillotineBreakingDistanceTrim, FourDistinctSoftTrimsAny)
     EXPECT_TRUE(best.feasible());
     EXPECT_TRUE(best.minimum_waste_length_feasible());
     EXPECT_EQ(best.number_of_items(), 3);
+    // 'best()' alone could hide a one-orientation regression. Pin the geometry:
+    // whichever branch the 'any' search picks, the left trim (10) must land on
+    // the x-axis and the bottom trim (20) on the y-axis — the swap logic keeps
+    // the reconstruction axis-consistent across both orientations. The dedicated
+    // forced-Vertical / forced-Horizontal tests above cover each branch in
+    // isolation; this asserts the invariant under the search's own choice.
+    EXPECT_TRUE(has_left_band(best, 10));
+    EXPECT_TRUE(has_bottom_band(best, 20));
 }
 
 TEST(RectangleGuillotineBreakingDistanceTrim, AsymmetricSoftTrimsHorizontalCutThickness)
@@ -245,8 +257,9 @@ TEST(RectangleGuillotineBreakingDistanceTrim, AsymmetricSoftTrimsHorizontalCutTh
 ////////////////////////////////////////////////////////////////////////////////
 // Negative — the checker must still reject genuine sub-mwl waste. These pin the
 // non-over-relaxation property on both the baseline (no-trim) path and the new
-// soft-trim path, so a future over-relaxation (e.g. dropping the std::max clamp
-// or widening the discount) is caught.
+// soft-trim path, so a future over-relaxation (e.g. widening the discount, or
+// dropping the is_waste_node / far-edge guards) is caught. (Dropping the
+// std::max clamp itself is behaviour-preserving: Length is signed.)
 ////////////////////////////////////////////////////////////////////////////////
 
 TEST(RectangleGuillotineBreakingDistanceTrim, SubMwlWasteRejectedBaselineNoTrim)
