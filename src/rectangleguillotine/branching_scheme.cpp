@@ -41,6 +41,7 @@ BranchingScheme::BranchingScheme(
 
     // Update stack_pred_
     stack_pred_ = std::vector<StackId>(instance.number_of_stacks(), -1);
+    stack_pred_strict_ = std::vector<bool>(instance.number_of_stacks(), false);
     for (StackId s = 0; s < instance.number_of_stacks(); ++s) {
         for (StackId s0 = s - 1; s0 >= 0; --s0) {
             if (equals(s, s0)) {
@@ -73,22 +74,61 @@ BranchingScheme::BranchingScheme(
 
     // Fix stack_pred_ for buddy instances: break links that cross buddy
     // group boundaries (including a buddy stack linked to a free/set
-    // stack), then relink broken entries within the same buddy group.
-    // Two identical-geometry stacks in different groups are NOT
-    // interchangeable — each carries its own co-location constraint — so
-    // the symmetry link must break. This composes with the set pass above:
-    // free and other-axis stacks have group id -1 and are mutually
-    // compatible, so each pass relinks only its own group type and leaves
-    // the other's links untouched.
+    // stack), then relink broken entries. Compatibility extends beyond
+    // the same group to ISOMORPHIC SINGLETON GROUPS: two stacks in
+    // different buddy groups may share a link when each is the sole
+    // stack of its group and the group totals match — such groups are
+    // physically interchangeable (links only ever form between equals()
+    // stacks), so chaining them restores the symmetry breaking that
+    // per-group ids would otherwise sever. Without the chain, k
+    // identical tuples yield 3^k distinguishable progress states
+    // (k = 13 in the motivating import — 1.6M states per dimension) and
+    // tree search finds no solution at all. Multi-stack groups and
+    // free/set stacks are never chained across groups — a free twin may
+    // legally split across plates, so chaining it would be unsound.
+    // This composes with the set pass above: free and other-axis stacks
+    // have group id -1 and are mutually compatible, so each pass
+    // relinks only its own group type and leaves the other's links
+    // untouched.
     if (instance.has_buddies()) {
         repair_stack_pred(
                 [&instance](StackId s) {
                     return instance.buddy_id_of_stack(s) != -1;
                 },
                 [&instance](StackId s, StackId sp) {
-                    return instance.buddy_id_of_stack(s)
-                            == instance.buddy_id_of_stack(sp);
+                    BuddyId g = instance.buddy_id_of_stack(s);
+                    BuddyId gp = instance.buddy_id_of_stack(sp);
+                    // Same group — or both outside the buddy axis.
+                    if (g == gp)
+                        return true;
+                    // Buddy stack linked to a free/set stack: break.
+                    if (g == -1 || gp == -1)
+                        return false;
+                    // Isomorphic singleton groups.
+                    return instance.buddy_stacks(g).size() == 1
+                            && instance.buddy_stacks(gp).size() == 1
+                            && instance.buddy_total(g)
+                                    == instance.buddy_total(gp);
                 });
+
+        // Mark cross-group links strict: a chained group may start only
+        // after its predecessor group is FULLY placed (see pred_blocks()).
+        // Sound by relabeling — interchangeable groups can be renamed so
+        // they complete in chain order; the children() new-bin guard
+        // keeps every group on one plate, which the relabeling argument
+        // depends on (see docs/buddies.md). Collapses a k-group chain
+        // from (k+1)(k+2)/2 partial-progress states (plus NodeHasher
+        // duplicates) to 2k+1.
+        for (StackId s = 0; s < instance.number_of_stacks(); ++s) {
+            StackId sp = stack_pred_[s];
+            if (sp == -1)
+                continue;
+            if (instance.buddy_id_of_stack(s) != -1
+                    && instance.buddy_id_of_stack(sp) != -1
+                    && instance.buddy_id_of_stack(s)
+                            != instance.buddy_id_of_stack(sp))
+                stack_pred_strict_[s] = true;
+        }
     }
 }
 
@@ -652,8 +692,7 @@ std::vector<std::shared_ptr<BranchingScheme::Node>> BranchingScheme::children(
         for (StackId s = 0; s < instance.number_of_stacks(); ++s) {
             if (parent.pos_stack[s] == instance.stack_size(s))
                 continue;
-            StackId sp = stack_pred_[s];
-            if (sp != -1 && parent.pos_stack[sp] <= parent.pos_stack[s])
+            if (pred_blocks(parent, s))
                 continue;
 
             // Set active-row constraint.
@@ -720,10 +759,7 @@ std::vector<std::shared_ptr<BranchingScheme::Node>> BranchingScheme::children(
                         // Check is the whold stack has already been packed.
                         if (parent.pos_stack[s2] + 1 == instance.stack_size(s2))
                             continue;
-                        StackId sp2 = stack_pred_[s2];
-                        if (sp2 != -1
-                                && parent.pos_stack[sp2]
-                                <= parent.pos_stack[s2])
+                        if (pred_blocks(parent, s2))
                             continue;
                         item_type_id_2 = instance.item(s2, parent.pos_stack[s2] + 1);
                     } else {
@@ -731,7 +767,15 @@ std::vector<std::shared_ptr<BranchingScheme::Node>> BranchingScheme::children(
                         if (parent.pos_stack[s2] == instance.stack_size(s2))
                             continue;
                         StackId sp2 = stack_pred_[s2];
-                        if ((sp2 == s
+                        if (sp2 != -1 && stack_pred_strict_[s2]) {
+                            // Strict chain: the pair inserts s's item
+                            // "first", so the predecessor group must be
+                            // exhausted counting that pending item.
+                            ItemPos placed = parent.pos_stack[sp2]
+                                    + ((sp2 == s)? 1: 0);
+                            if (placed != instance.stack_size(sp2))
+                                continue;
+                        } else if ((sp2 == s
                                     && parent.pos_stack[sp2] + 1
                                     <= parent.pos_stack[s2])
                                 || (sp2 != -1

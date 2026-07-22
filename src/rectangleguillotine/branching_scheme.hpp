@@ -392,6 +392,15 @@ private:
     std::vector<StackId> stack_pred_;
 
     /**
+     * stack_pred_strict_[s] is 'true' iff the link s -> stack_pred_[s]
+     * chains two DIFFERENT (isomorphic, singleton-stack) buddy groups.
+     * Strict links use the exhaustion rule in pred_blocks(): the
+     * predecessor group must be fully placed before stack s starts.
+     * All 'false' when the instance has no buddies.
+     */
+    std::vector<bool> stack_pred_strict_;
+
+    /**
      * Stacks belonging to a set (empty iff !instance_.has_sets()).
      *
      * Used by sets_complete(): under Objective::Knapsack, better() only
@@ -483,6 +492,27 @@ private:
                 return false;
         }
         return true;
+    }
+
+    /**
+     * Return 'true' iff the symmetry link of stack 's' forbids inserting
+     * its next item at 'node'.
+     *
+     * Plain links use the classic rule: the predecessor stack must be
+     * strictly ahead. Strict links (cross-group buddy chains, see
+     * stack_pred_strict_) require the predecessor stack to be EXHAUSTED:
+     * interchangeable buddy groups are placed one after the other, never
+     * interleaved. Uses instance_ (original) — stack indices and sizes
+     * are invariant under flipping.
+     */
+    inline bool pred_blocks(const Node& node, StackId s) const
+    {
+        StackId sp = stack_pred_[s];
+        if (sp == -1)
+            return false;
+        if (stack_pred_strict_[s])
+            return node.pos_stack[sp] != instance_.stack_size(sp);
+        return node.pos_stack[sp] <= node.pos_stack[s];
     }
 
     /** Total item copies of buddy group g already placed in 'node'. */
