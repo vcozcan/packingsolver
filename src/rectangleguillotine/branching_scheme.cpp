@@ -75,21 +75,12 @@ BranchingScheme::BranchingScheme(
     // Fix stack_pred_ for buddy instances: break links that cross buddy
     // group boundaries (including a buddy stack linked to a free/set
     // stack), then relink broken entries. Compatibility extends beyond
-    // the same group to ISOMORPHIC SINGLETON GROUPS: two stacks in
-    // different buddy groups may share a link when each is the sole
-    // stack of its group and the group totals match — such groups are
-    // physically interchangeable (links only ever form between equals()
-    // stacks), so chaining them restores the symmetry breaking that
-    // per-group ids would otherwise sever. Without the chain, k
-    // identical tuples yield 3^k distinguishable progress states
-    // (k = 13 in the motivating import — 1.6M states per dimension) and
-    // tree search finds no solution at all. Multi-stack groups and
-    // free/set stacks are never chained across groups — a free twin may
-    // legally split across plates, so chaining it would be unsound.
-    // This composes with the set pass above: free and other-axis stacks
-    // have group id -1 and are mutually compatible, so each pass
-    // relinks only its own group type and leaves the other's links
-    // untouched.
+    // the same group to ISOMORPHIC SINGLETON GROUPS (sole stack of the
+    // group, equal buddy_total): interchangeable groups chain, so
+    // identical tuples keep their symmetry breaking. Free/set stacks
+    // and multi-stack groups are never cross-chained (a free twin may
+    // legally split across plates). Rationale, state math, and the
+    // soundness argument: docs/buddies.md ("Symmetry breaking").
     if (instance.has_buddies()) {
         repair_stack_pred(
                 [&instance](StackId s) {
@@ -104,7 +95,12 @@ BranchingScheme::BranchingScheme(
                     // Buddy stack linked to a free/set stack: break.
                     if (g == -1 || gp == -1)
                         return false;
-                    // Isomorphic singleton groups.
+                    // Isomorphic singleton groups. The buddy_total clause
+                    // is redundant with the equals() gate today (a
+                    // singleton group's total IS its stack size, and every
+                    // link -- construction and pass-2 relink -- is
+                    // equals()-gated); kept as an independent statement of
+                    // the invariant should equals() ever loosen.
                     return instance.buddy_stacks(g).size() == 1
                             && instance.buddy_stacks(gp).size() == 1
                             && instance.buddy_total(g)
@@ -113,12 +109,9 @@ BranchingScheme::BranchingScheme(
 
         // Mark cross-group links strict: a chained group may start only
         // after its predecessor group is FULLY placed (see pred_blocks()).
-        // Sound by relabeling — interchangeable groups can be renamed so
-        // they complete in chain order; the children() new-bin guard
-        // keeps every group on one plate, which the relabeling argument
-        // depends on (see docs/buddies.md). Collapses a k-group chain
-        // from (k+1)(k+2)/2 partial-progress states (plus NodeHasher
-        // duplicates) to 2k+1.
+        // Soundness (lossless relabeling) DEPENDS on the children()
+        // new-bin guard keeping every group on one plate — see
+        // docs/buddies.md ("Symmetry breaking") before touching either.
         for (StackId s = 0; s < instance.number_of_stacks(); ++s) {
             StackId sp = stack_pred_[s];
             if (sp == -1)
@@ -759,8 +752,9 @@ std::vector<std::shared_ptr<BranchingScheme::Node>> BranchingScheme::children(
                         // Check is the whold stack has already been packed.
                         if (parent.pos_stack[s2] + 1 == instance.stack_size(s2))
                             continue;
-                        if (pred_blocks(parent, s2))
-                            continue;
+                        // (No predecessor re-check: the outer loop already
+                        // evaluated pred_blocks(parent, s) as false, and
+                        // parent is unchanged here.)
                         item_type_id_2 = instance.item(s2, parent.pos_stack[s2] + 1);
                     } else {
                         // Check is the whold stack has already been packed.

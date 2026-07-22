@@ -380,6 +380,39 @@ OptimizeParameters not_anytime_parameters()
     return optimize_parameters;
 }
 
+// First distinct-bin index that holds a copy of item_type_id, or -1.
+int bin_of_item(const Solution& solution, ItemTypeId item_type_id)
+{
+    for (BinPos b = 0; b < solution.number_of_different_bins(); ++b)
+        for (const SolutionNode& node: solution.bin(b).nodes)
+            if (node.d >= 1 && node.item_type_id == item_type_id)
+                return (int)b;
+    return -1;
+}
+
+// Number of distinct solution bins that hold >=1 copy of item_type_id. For a
+// co-located singleton buddy group (one item type, every copy on one plate)
+// this is 1; a group split across plates gives >1. A buddy-bearing plate never
+// collapses into a copies>1 SolutionBin (that would replicate the group across
+// physical plates and fail buddies_feasible(), which every test below also
+// asserts), so distinct-bin counting is a sound co-location probe here.
+// The d >= 1 filter skips structural nodes (the d = 0 bin root carries the
+// BIN type id in item_type_id, which collides with item type 0) — same
+// filter as Solution::update_indicators' buddy pass.
+int num_bins_with_item(const Solution& solution, ItemTypeId item_type_id)
+{
+    int count = 0;
+    for (BinPos b = 0; b < solution.number_of_different_bins(); ++b) {
+        for (const SolutionNode& node: solution.bin(b).nodes) {
+            if (node.d >= 1 && node.item_type_id == item_type_id) {
+                ++count;
+                break;
+            }
+        }
+    }
+    return count;
+}
+
 }
 
 TEST(RectangleGuillotineBuddies, SingleGroupCoLocates)
@@ -486,15 +519,8 @@ TEST(RectangleGuillotineBuddies, CoLocatesUnderBinPressureMultiPlate)
     EXPECT_TRUE(best.buddies_feasible());
 
     // Both group members must sit on the same physical plate (bin index).
-    auto bin_of = [&](ItemTypeId item_type_id) -> int {
-        for (BinPos b = 0; b < best.number_of_different_bins(); ++b)
-            for (const SolutionNode& node: best.bin(b).nodes)
-                if (node.item_type_id == item_type_id)
-                    return (int)b;
-        return -1;
-    };
-    int bin_a = bin_of(0);
-    int bin_b = bin_of(1);
+    int bin_a = bin_of_item(best, 0);
+    int bin_b = bin_of_item(best, 1);
     EXPECT_NE(bin_a, -1);
     EXPECT_EQ(bin_a, bin_b);
 }
@@ -502,46 +528,6 @@ TEST(RectangleGuillotineBuddies, CoLocatesUnderBinPressureMultiPlate)
 ////////////////////////////////////////////////////////////////////////////////
 //////////////////// Isomorphic cross-group chaining (optimize) /////////////////
 ////////////////////////////////////////////////////////////////////////////////
-
-namespace
-{
-
-// First distinct-bin index that holds a copy of item_type_id, or -1. Mirrors
-// the inline probe in CoLocatesUnderBinPressureMultiPlate, hoisted so the
-// cross-group tests below can share it.
-int bin_of_item(const Solution& solution, ItemTypeId item_type_id)
-{
-    for (BinPos b = 0; b < solution.number_of_different_bins(); ++b)
-        for (const SolutionNode& node: solution.bin(b).nodes)
-            if (node.d >= 1 && node.item_type_id == item_type_id)
-                return (int)b;
-    return -1;
-}
-
-// Number of distinct solution bins that hold >=1 copy of item_type_id. For a
-// co-located singleton buddy group (one item type, every copy on one plate)
-// this is 1; a group split across plates gives >1. A buddy-bearing plate never
-// collapses into a copies>1 SolutionBin (that would replicate the group across
-// physical plates and fail buddies_feasible(), which every test below also
-// asserts), so distinct-bin counting is a sound co-location probe here.
-// The d >= 1 filter skips structural nodes (the d = 0 bin root carries the
-// BIN type id in item_type_id, which collides with item type 0) — same
-// filter as Solution::update_indicators' buddy pass.
-int num_bins_with_item(const Solution& solution, ItemTypeId item_type_id)
-{
-    int count = 0;
-    for (BinPos b = 0; b < solution.number_of_different_bins(); ++b) {
-        for (const SolutionNode& node: solution.bin(b).nodes) {
-            if (node.d >= 1 && node.item_type_id == item_type_id) {
-                ++count;
-                break;
-            }
-        }
-    }
-    return count;
-}
-
-}
 
 TEST(RectangleGuillotineBuddies, IsomorphicSingletonGroupsCoLocateAtOptimum)
 {
@@ -655,9 +641,10 @@ TEST(RectangleGuillotineBuddies, IdenticalGeometryFreeStackSplitsWhileGroupCoLoc
     // Five half-plate pieces => ceil(5/2)=3 plates optimum. Four bins are
     // supplied; assert the 3-bin optimum, all five placed (the free twin was
     // NOT dropped or over-constrained), the group co-located on one plate, and
-    // the free twin genuinely spread over >=2 bins. Item 0 (buddy) precedes
-    // item 1 (free) so the initial equals() link 1->0 is exactly the one the
-    // buddy repair pass must break.
+    // the free twin genuinely spread over >=2 bins. NOTE: the twin's copy
+    // count (3 vs the group's 2) means no construction equals() link forms
+    // here (stack sizes differ) -- the buddy<->free break itself is pinned by
+    // FreeTwinLinkBreakAllowsFreeBeforeBuddyGroup below.
     InstanceBuilder instance_builder = buddies_instance_builder(Objective::BinPacking);
     instance_builder.add_item_type(2900, 3210, -1, 2);   // buddy group
     instance_builder.set_last_item_type_buddy(0);
@@ -678,12 +665,57 @@ TEST(RectangleGuillotineBuddies, IdenticalGeometryFreeStackSplitsWhileGroupCoLoc
     EXPECT_GE(num_bins_with_item(best, 1), 2);       // free twin genuinely split
 }
 
+TEST(RectangleGuillotineBuddies, FreeTwinLinkBreakAllowsFreeBeforeBuddyGroup)
+{
+    // Regression coverage for the buddy<->free break itself. The free twin has
+    // the SAME copy count as the buddy group (2), so the construction pass
+    // genuinely links stack 1 (free) -> stack 0 (buddy) via equals(); the
+    // buddy repair pass must BREAK that link (a free stack is never
+    // symmetry-linked to a buddy stack). If the link survived as a plain
+    // symmetry link, the free twin could never place a piece before the buddy
+    // group is ahead of it -- and this instance's only full packing needs
+    // exactly that:
+    //   - bin 0 (3000x3210, declared first): fits ONE 2900x3210 piece (the
+    //     rotated 3210-wide form does not fit at all). A buddy piece here
+    //     dead-ends: the partner cannot fit and the new-bin guard forbids
+    //     leaving the group open, so bin 0 must take a FREE piece while the
+    //     buddy group is still untouched.
+    //   - bin 1 (9000x3210): three 2900-wide columns hold the buddy pair plus
+    //     the remaining free piece (a rotated column costs 3210 width, so no
+    //     arrangement beats 3 pieces).
+    // Assert full placement across 2 bins with the group co-located on the
+    // large bin: a kept link makes the full packing unreachable and the test
+    // fails.
+    InstanceBuilder instance_builder = buddies_instance_builder(Objective::BinPacking);
+    instance_builder.add_item_type(2900, 3210, -1, 2);   // buddy group
+    instance_builder.set_last_item_type_buddy(0);
+    instance_builder.add_item_type(2900, 3210, -1, 2);   // equal-copy free twin
+    instance_builder.add_bin_type(3000, 3210, -1, 1);    // fits one piece
+    instance_builder.add_bin_type(9000, 3210, -1, 1);    // fits three pieces
+    Instance instance = instance_builder.build();
+
+    OptimizeParameters optimize_parameters = not_anytime_parameters();
+    auto output = optimize(instance, optimize_parameters);
+
+    const Solution& best = output.solution_pool.best();
+    EXPECT_EQ(best.number_of_items(), 4);            // nothing dropped
+    EXPECT_EQ(best.item_copies(1), 2);               // free twin fully placed
+    EXPECT_EQ(best.number_of_bins(), 2);
+    EXPECT_TRUE(best.feasible());
+    EXPECT_TRUE(best.buddies_feasible());
+    EXPECT_EQ(num_bins_with_item(best, 0), 1);       // pair co-located...
+    EXPECT_EQ(bin_of_item(best, 0), 1);              // ...on the large bin
+}
+
 TEST(RectangleGuillotineBuddies, DifferentTotalsNotChained)
 {
-    // Two same-geometry singleton groups with DIFFERENT totals (m=2 vs m=3) are
-    // not chained: the compatibility test requires equal buddy_total. Both
-    // still co-locate independently. Pieces 2000x1600 (6 per plate); group 0 is
-    // 2 copies, group 1 is 3 copies => 5 pieces on one plate, optimum 1 bin.
+    // Two same-geometry singleton groups with DIFFERENT totals (m=2 vs m=3)
+    // are never chained: their stack sizes differ, so the equals() gate
+    // refuses the link (compatible()'s equal-buddy_total clause states the
+    // same invariant redundantly -- no input can make it the deciding
+    // factor). Both groups still co-locate independently. Pieces 2000x1600
+    // (6 per plate); group 0 is 2 copies, group 1 is 3 copies => 5 pieces on
+    // one plate, optimum 1 bin.
     InstanceBuilder instance_builder = buddies_instance_builder(Objective::BinPacking);
     instance_builder.add_item_type(2000, 1600, -1, 2);
     instance_builder.set_last_item_type_buddy(0);
