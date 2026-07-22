@@ -339,11 +339,13 @@ TEST(RectangleGuillotineBuddies, FlipperRoundTripPropagatesBuddies)
 ////////////////////////// Branching scheme tests //////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////
 
-TEST(RectangleGuillotineBuddies, StackPredCrossGroupBroken)
+TEST(RectangleGuillotineBuddies, StackPredBuddyAxisRepairBuilds)
 {
     // Identical-geometry rows across two buddy groups + a free row + a
-    // set row. stack_pred_ must not link across buddy boundaries (or
-    // between buddy/free/set); the scheme must still build.
+    // set row. The two isomorphic singleton buddy groups CHAIN (strict
+    // cross-group link); buddy/free and buddy/set links must break; the
+    // scheme must still build. Chain/strict behavior is pinned by the
+    // enforcement tests below — this only guards construction.
     InstanceBuilder instance_builder = buddies_instance_builder();
     instance_builder.add_item_type(1000, 500, -1, 2);
     instance_builder.set_last_item_type_buddy(0);
@@ -376,6 +378,39 @@ OptimizeParameters not_anytime_parameters()
     optimize_parameters.optimization_mode
             = packingsolver::OptimizationMode::NotAnytimeSequential;
     return optimize_parameters;
+}
+
+// First distinct-bin index that holds a copy of item_type_id, or -1.
+int bin_of_item(const Solution& solution, ItemTypeId item_type_id)
+{
+    for (BinPos b = 0; b < solution.number_of_different_bins(); ++b)
+        for (const SolutionNode& node: solution.bin(b).nodes)
+            if (node.d >= 1 && node.item_type_id == item_type_id)
+                return (int)b;
+    return -1;
+}
+
+// Number of distinct solution bins that hold >=1 copy of item_type_id. For a
+// co-located singleton buddy group (one item type, every copy on one plate)
+// this is 1; a group split across plates gives >1. A buddy-bearing plate never
+// collapses into a copies>1 SolutionBin (that would replicate the group across
+// physical plates and fail buddies_feasible(), which every test below also
+// asserts), so distinct-bin counting is a sound co-location probe here.
+// The d >= 1 filter skips structural nodes (the d = 0 bin root carries the
+// BIN type id in item_type_id, which collides with item type 0) — same
+// filter as Solution::update_indicators' buddy pass.
+int num_bins_with_item(const Solution& solution, ItemTypeId item_type_id)
+{
+    int count = 0;
+    for (BinPos b = 0; b < solution.number_of_different_bins(); ++b) {
+        for (const SolutionNode& node: solution.bin(b).nodes) {
+            if (node.d >= 1 && node.item_type_id == item_type_id) {
+                ++count;
+                break;
+            }
+        }
+    }
+    return count;
 }
 
 }
@@ -484,17 +519,310 @@ TEST(RectangleGuillotineBuddies, CoLocatesUnderBinPressureMultiPlate)
     EXPECT_TRUE(best.buddies_feasible());
 
     // Both group members must sit on the same physical plate (bin index).
-    auto bin_of = [&](ItemTypeId item_type_id) -> int {
-        for (BinPos b = 0; b < best.number_of_different_bins(); ++b)
-            for (const SolutionNode& node: best.bin(b).nodes)
-                if (node.item_type_id == item_type_id)
-                    return (int)b;
-        return -1;
-    };
-    int bin_a = bin_of(0);
-    int bin_b = bin_of(1);
+    int bin_a = bin_of_item(best, 0);
+    int bin_b = bin_of_item(best, 1);
     EXPECT_NE(bin_a, -1);
     EXPECT_EQ(bin_a, bin_b);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+//////////////////// Isomorphic cross-group chaining (optimize) /////////////////
+////////////////////////////////////////////////////////////////////////////////
+
+TEST(RectangleGuillotineBuddies, IsomorphicSingletonGroupsCoLocateAtOptimum)
+{
+    // Four IDENTICAL 2-copy singleton buddy groups (2000x1600, non-oriented)
+    // plus four free fillers of the same size. A 6000x3210 plate holds a
+    // 3(wide) x 2(tall) grid = 6 pieces (3*2000=6000, 2*1600=3200<=3210), so
+    // each piece is 3.2M and a plate carries 19.2M <= 19.26M usable. The 12
+    // pieces need ceil(12/6)=2 plates by area and 2 plates suffice (e.g. groups
+    // 0,1,2 on one plate; group 3 + four fillers on the other), so the optimum
+    // is 2 bins. The four groups are equals()-identical singletons, so they are
+    // cross-chained; assert the full 2-bin optimum AND that every group's two
+    // copies co-locate on one plate.
+    InstanceBuilder instance_builder = buddies_instance_builder(Objective::BinPacking);
+    instance_builder.add_item_type(2000, 1600, -1, 2);
+    instance_builder.set_last_item_type_buddy(0);
+    instance_builder.add_item_type(2000, 1600, -1, 2);
+    instance_builder.set_last_item_type_buddy(1);
+    instance_builder.add_item_type(2000, 1600, -1, 2);
+    instance_builder.set_last_item_type_buddy(2);
+    instance_builder.add_item_type(2000, 1600, -1, 2);
+    instance_builder.set_last_item_type_buddy(3);
+    instance_builder.add_item_type(2000, 1600, -1, 4);   // free fillers
+    instance_builder.add_bin_type(6000, 3210, -1, 2);
+    Instance instance = instance_builder.build();
+
+    OptimizeParameters optimize_parameters = not_anytime_parameters();
+    auto output = optimize(instance, optimize_parameters);
+
+    const Solution& best = output.solution_pool.best();
+    EXPECT_EQ(best.number_of_items(), instance.number_of_items());
+    EXPECT_EQ(best.number_of_bins(), 2);
+    EXPECT_TRUE(best.feasible());
+    EXPECT_TRUE(best.buddies_feasible());
+    EXPECT_EQ(num_bins_with_item(best, 0), 1);
+    EXPECT_EQ(num_bins_with_item(best, 1), 1);
+    EXPECT_EQ(num_bins_with_item(best, 2), 1);
+    EXPECT_EQ(num_bins_with_item(best, 3), 1);
+}
+
+TEST(RectangleGuillotineBuddies, InterleavedIsomorphicPairsReachOnePlate)
+{
+    // Soundness of the STRICT cross-group chain (the relabel-by-rank argument).
+    // Two identical 2-copy buddy pairs (3000x1600, non-oriented). One 6000x3210
+    // plate holds a 2x2 grid: two 3000-wide columns (2*3000=6000), each with
+    // two 1600-tall rows (2*1600=3200<=3210). 4 pieces * 4.8M = 19.2M <= 19.26M,
+    // so the sole optimum is ONE bin. The strict rule orders pair 0 fully
+    // before pair 1 in INSERTION order, yet the single-plate packing is still
+    // reachable: the two pieces sharing a column can always be labeled the same
+    // group because the pairs are equals()-identical (relabel by rank). Two
+    // bins are supplied so an over-constrained chain that lost the packing would
+    // surface as a 2-bin result; assert the 1-bin optimum is found with both
+    // pairs co-located.
+    InstanceBuilder instance_builder = buddies_instance_builder(Objective::BinPacking);
+    instance_builder.add_item_type(3000, 1600, -1, 2);
+    instance_builder.set_last_item_type_buddy(0);
+    instance_builder.add_item_type(3000, 1600, -1, 2);
+    instance_builder.set_last_item_type_buddy(1);
+    instance_builder.add_bin_type(6000, 3210, -1, 2);   // room to (wrongly) split
+    Instance instance = instance_builder.build();
+
+    OptimizeParameters optimize_parameters = not_anytime_parameters();
+    auto output = optimize(instance, optimize_parameters);
+
+    const Solution& best = output.solution_pool.best();
+    EXPECT_EQ(best.number_of_items(), instance.number_of_items());  // all 4
+    EXPECT_EQ(best.number_of_bins(), 1);                            // not split
+    EXPECT_TRUE(best.feasible());
+    EXPECT_TRUE(best.buddies_feasible());
+    EXPECT_EQ(bin_of_item(best, 0), bin_of_item(best, 1));          // same plate
+}
+
+TEST(RectangleGuillotineBuddies, NonIsomorphicDifferentDimsSolveIndependently)
+{
+    // Two 2-copy singleton groups with DIFFERENT geometry are never chained
+    // (equals() is false across them). Group A: 2x 2000x1600 (buddy 0). Group
+    // B: 2x 1500x1000 (buddy 1). Areas 6.4M + 3.0M = 9.4M < 19.26M fit one
+    // plate, so the optimum is 1 bin with both groups co-located. Pins the
+    // negative case: differing dims must not fire the cross-group chain.
+    InstanceBuilder instance_builder = buddies_instance_builder(Objective::BinPacking);
+    instance_builder.add_item_type(2000, 1600, -1, 2);
+    instance_builder.set_last_item_type_buddy(0);
+    instance_builder.add_item_type(1500, 1000, -1, 2);
+    instance_builder.set_last_item_type_buddy(1);
+    instance_builder.add_bin_type(6000, 3210);   // single plate
+    Instance instance = instance_builder.build();
+
+    OptimizeParameters optimize_parameters = not_anytime_parameters();
+    auto output = optimize(instance, optimize_parameters);
+
+    const Solution& best = output.solution_pool.best();
+    EXPECT_EQ(best.number_of_items(), instance.number_of_items());
+    EXPECT_EQ(best.number_of_bins(), 1);
+    EXPECT_TRUE(best.feasible());
+    EXPECT_TRUE(best.buddies_feasible());
+    EXPECT_EQ(num_bins_with_item(best, 0), 1);
+    EXPECT_EQ(num_bins_with_item(best, 1), 1);
+}
+
+TEST(RectangleGuillotineBuddies, IdenticalGeometryFreeStackSplitsWhileGroupCoLocates)
+{
+    // A 2-copy buddy group and a FREE stack of IDENTICAL geometry. The free
+    // twin must stay free to split across plates; it must never be chained to
+    // (or co-located like) the buddy group. Pieces are 2900x3210 -- roughly
+    // half a plate wide, full height -- so exactly two fit per 6000x3210 plate
+    // (2*2900=5800<=6000, a third needs 8700>6000).
+    //   - Group (item 0, buddy 0, 2 copies): both copies co-locate and fill one
+    //     plate's two columns; the 200-wide remainder holds nothing more.
+    //   - Free twin (item 1, 3 copies): three half-plate pieces cannot join the
+    //     group's plate and cannot all share one plate, so they occupy two
+    //     further plates (2 + 1) and MUST split across bins.
+    // Five half-plate pieces => ceil(5/2)=3 plates optimum. Four bins are
+    // supplied; assert the 3-bin optimum, all five placed (the free twin was
+    // NOT dropped or over-constrained), the group co-located on one plate, and
+    // the free twin genuinely spread over >=2 bins. NOTE: the twin's copy
+    // count (3 vs the group's 2) means no construction equals() link forms
+    // here (stack sizes differ) -- the buddy<->free break itself is pinned by
+    // FreeTwinLinkBreakAllowsFreeBeforeBuddyGroup below.
+    InstanceBuilder instance_builder = buddies_instance_builder(Objective::BinPacking);
+    instance_builder.add_item_type(2900, 3210, -1, 2);   // buddy group
+    instance_builder.set_last_item_type_buddy(0);
+    instance_builder.add_item_type(2900, 3210, -1, 3);   // identical-geometry free twin
+    instance_builder.add_bin_type(6000, 3210, -1, 4);
+    Instance instance = instance_builder.build();
+
+    OptimizeParameters optimize_parameters = not_anytime_parameters();
+    auto output = optimize(instance, optimize_parameters);
+
+    const Solution& best = output.solution_pool.best();
+    EXPECT_EQ(best.number_of_items(), 5);            // nothing dropped
+    EXPECT_EQ(best.item_copies(1), 3);               // free twin fully placed...
+    EXPECT_EQ(best.number_of_bins(), 3);             // ...by splitting across bins
+    EXPECT_TRUE(best.feasible());
+    EXPECT_TRUE(best.buddies_feasible());
+    EXPECT_EQ(num_bins_with_item(best, 0), 1);       // buddy group co-located
+    EXPECT_GE(num_bins_with_item(best, 1), 2);       // free twin genuinely split
+}
+
+TEST(RectangleGuillotineBuddies, FreeTwinLinkBreakAllowsFreeBeforeBuddyGroup)
+{
+    // Regression coverage for the buddy<->free break itself. The free twin has
+    // the SAME copy count as the buddy group (2), so the construction pass
+    // genuinely links stack 1 (free) -> stack 0 (buddy) via equals(); the
+    // buddy repair pass must BREAK that link (a free stack is never
+    // symmetry-linked to a buddy stack). If the link survived as a plain
+    // symmetry link, the free twin could never place a piece before the buddy
+    // group is ahead of it -- and this instance's only full packing needs
+    // exactly that:
+    //   - bin 0 (3000x3210, declared first): fits ONE 2900x3210 piece (the
+    //     rotated 3210-wide form does not fit at all). A buddy piece here
+    //     dead-ends: the partner cannot fit and the new-bin guard forbids
+    //     leaving the group open, so bin 0 must take a FREE piece while the
+    //     buddy group is still untouched.
+    //   - bin 1 (9000x3210): three 2900-wide columns hold the buddy pair plus
+    //     the remaining free piece (a rotated column costs 3210 width, so no
+    //     arrangement beats 3 pieces).
+    // Assert full placement across 2 bins with the group co-located on the
+    // large bin: a kept link makes the full packing unreachable and the test
+    // fails.
+    InstanceBuilder instance_builder = buddies_instance_builder(Objective::BinPacking);
+    instance_builder.add_item_type(2900, 3210, -1, 2);   // buddy group
+    instance_builder.set_last_item_type_buddy(0);
+    instance_builder.add_item_type(2900, 3210, -1, 2);   // equal-copy free twin
+    instance_builder.add_bin_type(3000, 3210, -1, 1);    // fits one piece
+    instance_builder.add_bin_type(9000, 3210, -1, 1);    // fits three pieces
+    Instance instance = instance_builder.build();
+
+    OptimizeParameters optimize_parameters = not_anytime_parameters();
+    auto output = optimize(instance, optimize_parameters);
+
+    const Solution& best = output.solution_pool.best();
+    EXPECT_EQ(best.number_of_items(), 4);            // nothing dropped
+    EXPECT_EQ(best.item_copies(1), 2);               // free twin fully placed
+    EXPECT_EQ(best.number_of_bins(), 2);
+    EXPECT_TRUE(best.feasible());
+    EXPECT_TRUE(best.buddies_feasible());
+    EXPECT_EQ(num_bins_with_item(best, 0), 1);       // pair co-located...
+    EXPECT_EQ(bin_of_item(best, 0), 1);              // ...on the large bin
+}
+
+TEST(RectangleGuillotineBuddies, DifferentTotalsNotChained)
+{
+    // Two same-geometry singleton groups with DIFFERENT totals (m=2 vs m=3)
+    // are never chained: their stack sizes differ, so the equals() gate
+    // refuses the link (compatible()'s equal-buddy_total clause states the
+    // same invariant redundantly -- no input can make it the deciding
+    // factor). Both groups still co-locate independently. Pieces 2000x1600
+    // (6 per plate); group 0 is 2 copies, group 1 is 3 copies => 5 pieces on
+    // one plate, optimum 1 bin.
+    InstanceBuilder instance_builder = buddies_instance_builder(Objective::BinPacking);
+    instance_builder.add_item_type(2000, 1600, -1, 2);
+    instance_builder.set_last_item_type_buddy(0);
+    instance_builder.add_item_type(2000, 1600, -1, 3);
+    instance_builder.set_last_item_type_buddy(1);
+    instance_builder.add_bin_type(6000, 3210);   // single plate
+    Instance instance = instance_builder.build();
+
+    OptimizeParameters optimize_parameters = not_anytime_parameters();
+    auto output = optimize(instance, optimize_parameters);
+
+    const Solution& best = output.solution_pool.best();
+    EXPECT_EQ(best.number_of_items(), instance.number_of_items());   // 5
+    EXPECT_EQ(best.number_of_bins(), 1);
+    EXPECT_TRUE(best.feasible());
+    EXPECT_TRUE(best.buddies_feasible());
+    EXPECT_EQ(num_bins_with_item(best, 0), 1);
+    EXPECT_EQ(num_bins_with_item(best, 1), 1);
+}
+
+TEST(RectangleGuillotineBuddies, KnapsackPrefixDropKeepsOnePair)
+{
+    // Two identical 2-copy buddy pairs (2900x3210) but a single plate with room
+    // for only ONE pair: two 2900-wide pieces fit (2*2900=5800<=6000), a third
+    // does not (3*2900=8700>6000), and each pair is all-or-nothing. Under
+    // Knapsack the optimum keeps exactly one full pair (profit = one pair's
+    // area) and drops the other entirely -- never half a pair. Mirrors the
+    // all-or-nothing style of GroupForcedAcrossBinsDroppedUnderKnapsack.
+    InstanceBuilder instance_builder = buddies_instance_builder(Objective::Knapsack);
+    instance_builder.add_item_type(2900, 3210, -1, 2);
+    instance_builder.set_last_item_type_buddy(0);
+    instance_builder.add_item_type(2900, 3210, -1, 2);
+    instance_builder.set_last_item_type_buddy(1);
+    instance_builder.add_bin_type(6000, 3210);
+    Instance instance = instance_builder.build();
+
+    OptimizeParameters optimize_parameters = not_anytime_parameters();
+    auto output = optimize(instance, optimize_parameters);
+
+    const Solution& best = output.solution_pool.best();
+    EXPECT_EQ(best.number_of_items(), 2);          // one full pair, no partial
+    EXPECT_TRUE(best.buddies_feasible());
+    // Exactly one pair retained in full, the other fully dropped (all-or-
+    // nothing prefix-drop): the two copies of one buddy id, none of the other.
+    bool pair0_kept = (best.item_copies(0) == 2 && best.item_copies(1) == 0);
+    bool pair1_kept = (best.item_copies(0) == 0 && best.item_copies(1) == 2);
+    EXPECT_TRUE(pair0_kept || pair1_kept);
+}
+
+TEST(RectangleGuillotineBuddies, IsomorphicM3GroupsCoLocateAtOptimum)
+{
+    // Three IDENTICAL 3-copy singleton buddy groups (2000x1600). buddy_total=3
+    // for each; equal totals + singleton => they chain (m=3 chaining). 9 pieces
+    // at 6 per plate need ceil(9/6)=2 plates (e.g. groups 0,1 on one plate,
+    // group 2 on the other); each 3-copy group co-locates. Optimum 2 bins.
+    InstanceBuilder instance_builder = buddies_instance_builder(Objective::BinPacking);
+    instance_builder.add_item_type(2000, 1600, -1, 3);
+    instance_builder.set_last_item_type_buddy(0);
+    instance_builder.add_item_type(2000, 1600, -1, 3);
+    instance_builder.set_last_item_type_buddy(1);
+    instance_builder.add_item_type(2000, 1600, -1, 3);
+    instance_builder.set_last_item_type_buddy(2);
+    instance_builder.add_bin_type(6000, 3210, -1, 2);
+    Instance instance = instance_builder.build();
+
+    OptimizeParameters optimize_parameters = not_anytime_parameters();
+    auto output = optimize(instance, optimize_parameters);
+
+    const Solution& best = output.solution_pool.best();
+    EXPECT_EQ(best.number_of_items(), instance.number_of_items());   // 9
+    EXPECT_EQ(best.number_of_bins(), 2);
+    EXPECT_TRUE(best.feasible());
+    EXPECT_TRUE(best.buddies_feasible());
+    EXPECT_EQ(num_bins_with_item(best, 0), 1);
+    EXPECT_EQ(num_bins_with_item(best, 1), 1);
+    EXPECT_EQ(num_bins_with_item(best, 2), 1);
+}
+
+TEST(RectangleGuillotineBuddies, ScaleManyIsomorphicGroupsSolveFast)
+{
+    // Regression guard for the 3^k progress-state flood. Twelve IDENTICAL
+    // 2-copy singleton buddy groups (2000x1600) => 24 pieces. Without the
+    // isomorphic cross-group chain these twelve interchangeable tuples yield
+    // ~3^12 distinguishable progress states and tree search effectively never
+    // returns; the chain collapses that to a linear number of states. Area:
+    // 24 * 3.2M = 76.8M and four 19.26M plates = 77.04M (76.8M/19.26M = 3.99),
+    // so the optimum is exactly 4 bins (6 pieces/plate, 3 groups/plate). Four
+    // plates are supplied; assert the full 4-bin optimum is found (which, per
+    // the guard, must now happen quickly rather than time out).
+    InstanceBuilder instance_builder = buddies_instance_builder(Objective::BinPacking);
+    for (BuddyId g = 0; g < 12; ++g) {
+        instance_builder.add_item_type(2000, 1600, -1, 2);
+        instance_builder.set_last_item_type_buddy(g);
+    }
+    instance_builder.add_bin_type(6000, 3210, -1, 4);
+    Instance instance = instance_builder.build();
+
+    OptimizeParameters optimize_parameters = not_anytime_parameters();
+    auto output = optimize(instance, optimize_parameters);
+
+    const Solution& best = output.solution_pool.best();
+    EXPECT_EQ(best.number_of_items(), instance.number_of_items());   // all 24
+    EXPECT_EQ(best.number_of_bins(), 4);
+    EXPECT_TRUE(best.feasible());
+    EXPECT_TRUE(best.buddies_feasible());
+    for (ItemTypeId item_type_id = 0; item_type_id < 12; ++item_type_id)
+        EXPECT_EQ(num_bins_with_item(best, item_type_id), 1);
 }
 
 ////////////////////////////////////////////////////////////////////////////////

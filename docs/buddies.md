@@ -152,19 +152,80 @@ error. A single-bin trial-pack is a future tightening.
 ### Symmetry breaking (stack_pred_)
 
 The `stack_pred_` array provides symmetry breaking by linking duplicate stacks.
-For buddy instances, a two-pass post-processing step runs after the standard
-construction (and composes with the analogous set pass):
+For buddy instances, a two-pass post-processing step (`repair_stack_pred`) runs
+after the standard construction (and composes with the analogous set pass):
 
-1. **Pass 1 — break:** Break links whose two stacks are in different buddy
-   groups (including a buddy stack linked to a free or set stack). Two
-   identical-geometry stacks in different groups are *not* interchangeable —
-   each carries its own co-location constraint.
-2. **Pass 2 — relink:** Relink broken entries to a valid predecessor within the
-   same buddy group (skipping `buddy_id == -1`, so free/set stacks are never
-   relinked by this pass).
+1. **Pass 1 — break:** Break a link `s -> stack_pred_[s]` whose two stacks are
+   *incompatible* on the buddy axis. A buddy stack linked to a free or set stack
+   is always broken — the buddy stack carries a co-location constraint the other
+   does not.
+2. **Pass 2 — relink:** Relink a broken entry to the nearest earlier compatible,
+   geometrically-equal predecessor (skipping `buddy_id == -1`, so free/set
+   stacks are never relinked by this pass).
 
 The set pass and the buddy pass compose: each relinks only its own group type
 (skipping the sentinel `-1`) and treats the other type as `-1`.
+
+**Compatibility, and cross-group chaining.** Two buddy stacks are *compatible*
+when they share a group, or when each is the **sole stack of its group**
+(singleton-stack group) and their `buddy_total`s match — *isomorphic singleton
+groups*. The second case links stacks across group boundaries. A link only ever
+forms between `equals()` stacks (both at construction and in the pass-2 relink),
+so the two groups are geometrically identical and physically interchangeable;
+chaining them restores the symmetry breaking that per-group ids would otherwise
+sever. Multi-stack (heterogeneous) groups are never chained across groups, and a
+free or set stack is never chained into a buddy chain — a free twin may legally
+split across plates, so chaining it would be unsound.
+
+**Strict-sequential rule.** A cross-group link is marked *strict*
+(`stack_pred_strict_`); a plain (same-group or non-buddy) link is not.
+`pred_blocks()` reads the flag:
+
+- a **plain** link uses the classic rule — the predecessor stack must be
+  strictly ahead (`pos_stack[sp] > pos_stack[s]`) before `s` may place its next
+  item;
+- a **strict** link instead requires the predecessor stack to be *exhausted*
+  (`pos_stack[sp] == stack_size(sp)`) before `s` places its first (or any) item.
+  Chained groups are thus placed one after the other, never interleaved.
+
+`pred_blocks()` gates the single-item insertion loop; the Roadef2018 two-item
+path applies the same test with a pending-item adjustment (the pair inserts
+`s`'s item "first", so the predecessor count includes that pending item).
+
+**Why the chain, and why strict.** Without it, `k` isomorphic single-tuple
+groups of one dimension expose `3^k` distinguishable progress states — each group
+independently untouched / open / complete — and because `NodeHasher` compares
+exact `pos_stack`, permutation-equivalent nodes never merge, flooding the tree.
+(A real sipariş-takip import had 13 identical 1051x574 tuples, 12 identical
+1850x900 tuples, etc., and tree search returned zero solutions within any
+budget.) Plain chaining alone would cut this to `(k+1)(k+2)/2` states but leaves
+residual beam duplicates — `(2,2,0,…)` and `(2,1,1,…)` are geometrically
+identical yet hash differently. The strict rule collapses the chain to `2k+1`
+states with no duplicates.
+
+**Soundness — lossless canonicalization by relabeling.** The strict chain prunes
+nothing feasible. Pieces of isomorphic singleton groups are physically
+identical, so group names may be permuted freely in any feasible solution. The
+new-bin guard (`children()` refuses to open a new bin while any buddy group is
+open) guarantees no group ever straddles two plates. Take any feasible solution
+and order the chained groups by the plate they complete on; within a single
+plate, any `2p` identical co-located pieces can be re-paired by consecutive
+insertion ranks. This holds even when plate geometry forces the two groups'
+pieces to physically interleave (e.g. alternating down a column), because *which*
+pieces form a pair is a labeling choice, not a geometric one. So every feasible
+solution has a relabeled twin in which the chained groups complete in chain
+order — exactly the representatives the strict rule keeps. The pruning is
+lossless.
+
+Under `Objective::Knapsack` (subset selection) the chain additionally forces the
+kept groups to be a *prefix* of the chain. Sound for the same reason: if any `j`
+of the `k` isomorphic groups are kept, relabel the kept ones to be the first `j`.
+
+> **Coupling warning — the strict chain depends on the new-bin guard.** Its
+> soundness rests on the invariant that no buddy group straddles plates. Any
+> future change that relaxes it — soft buddies, partial group retention, an open
+> group carried across bins — must revisit or remove the cross-group chain, or
+> the search becomes incomplete.
 
 ### Node and NodeHasher
 
@@ -286,8 +347,10 @@ Automated tests in `test/rectangleguillotine/buddies_test.cpp`:
   trims), mutual exclusion still rejected after copy support, builder reuse.
 - **Internal copy / flipper:** mixed-composition flipper round trip preserving
   stack structure and buddy metadata.
-- **Branching scheme:** cross-group `stack_pred_` breaking across free / set /
-  multiple buddy groups of identical geometry.
+- **Branching scheme:** `stack_pred_` handling for identical-geometry rows
+  spanning two buddy groups, a free row, and a set row — buddy↔free/set links
+  break, isomorphic singleton buddy groups chain across group boundaries; the
+  scheme still builds.
 - **Enforcement (optimize):** single group co-locates, multi-row + multi-copy
   groups co-locate with free items, a group that cannot co-locate (passes the
   area precheck) is dropped entirely under Knapsack, tree search solves a buddy
@@ -307,8 +370,8 @@ Automated tests in `test/rectangleguillotine/buddies_test.cpp`:
 | `instance_builder.hpp` | `set_last_item_type_buddy()` declaration |
 | `instance_builder.cpp` | CSV parsing, validation, dense remap, `buddy_total_`, area precheck, buddy-propagating internal copy overload |
 | `solution.hpp` / `solution.cpp` | `buddies_feasible()` companion checker in `update_indicators()` |
-| `branching_scheme.hpp` | `buddy_placed`/`buddies_open`/`buddies_complete` helpers |
-| `branching_scheme.cpp` | Two-pass buddy `stack_pred_` fix, new-bin guard, `better()` retention rule, `to_solution()` buddy tripwire |
+| `branching_scheme.hpp` | `buddy_placed`/`buddies_open`/`buddies_complete` helpers, `stack_pred_strict_` member, `pred_blocks()` |
+| `branching_scheme.cpp` | Two-pass buddy `stack_pred_` fix + cross-group chaining of isomorphic singleton groups (strict-sequential rule), new-bin guard, `better()` retention rule, `to_solution()` buddy tripwire |
 | `optimize.cpp` | Buddy gate (tree-search-only; CG/SSK/SVC/DS rejected; multi-bin-type VBPP rejected) |
 | `instance.cpp` | Buddy-aware `write()` (independent of sets), `operator<<` |
 | `test/rectangleguillotine/buddies_test.cpp` | Buddy test suite |
