@@ -431,8 +431,13 @@ packingsolver::box::Output packingsolver::box::optimize(
                     use_sequential_single_knapsack = true;
                 } else {
                     use_sequential_value_correction = true;
-                    if (instance.number_of_bin_types() == 1)
+                    // BPPL never auto-selects column generation: its master
+                    // problem is empty. See rectangleguillotine/optimize.cpp
+                    // for the full note.
+                    if (instance.objective() == Objective::BinPacking
+                            && instance.number_of_bin_types() == 1) {
                         use_column_generation = true;
+                    }
                 }
             } else {
                 use_tree_search = true;
@@ -441,8 +446,10 @@ packingsolver::box::Output packingsolver::box::optimize(
                     use_sequential_single_knapsack = true;
                 } else {
                     use_sequential_value_correction = true;
-                    if (instance.number_of_bin_types() == 1)
+                    if (instance.objective() == Objective::BinPacking
+                            && instance.number_of_bin_types() == 1) {
                         use_column_generation = true;
+                    }
                 }
             }
         }

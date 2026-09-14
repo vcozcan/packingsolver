@@ -525,6 +525,21 @@ packingsolver::rectangleguillotine::Output packingsolver::rectangleguillotine::o
             use_column_generation = false;
         use_dichotomic_search = false;
         // Automatic selection.
+        //
+        // Column generation is auto-selected for 'BinPacking' only, never
+        // for 'BinPackingWithLeftovers': 'get_model' in
+        // 'algorithms/column_generation.hpp' builds item-type rows for
+        // 'BinPacking', 'VariableSizedBinPacking' and 'Knapsack' only, so
+        // under 'BinPackingWithLeftovers' the master problem is empty and
+        // the algorithm returns an empty solution in a couple of
+        // milliseconds while still occupying a thread of the pool.
+        // Upstream reached the same conclusion in 3faad83 ("column
+        // generation: sequential feasibility scheme for BinPacking with
+        // multiple bin types"), which additionally lifted the
+        // 'number_of_bin_types() == 1' restriction because it taught
+        // column generation a sequential feasibility scheme for
+        // heterogeneous bin types; that scheme is not in this fork, so the
+        // single-bin-type restriction is kept here.
         if (!use_tree_search
                 && !use_sequential_single_knapsack
                 && !use_sequential_value_correction
@@ -537,7 +552,8 @@ packingsolver::rectangleguillotine::Output packingsolver::rectangleguillotine::o
                     use_sequential_single_knapsack = true;
                 } else {
                     use_sequential_value_correction = true;
-                    if (instance.number_of_bin_types() == 1
+                    if (instance.objective() == Objective::BinPacking
+                            && instance.number_of_bin_types() == 1
                             && instance.number_of_stacks() == instance.number_of_item_types()) {
                         use_column_generation = true;
                     }
@@ -549,7 +565,8 @@ packingsolver::rectangleguillotine::Output packingsolver::rectangleguillotine::o
                     use_sequential_single_knapsack = true;
                 } else {
                     use_sequential_value_correction = true;
-                    if (instance.number_of_bin_types() == 1
+                    if (instance.objective() == Objective::BinPacking
+                            && instance.number_of_bin_types() == 1
                             && instance.number_of_stacks() == instance.number_of_item_types()) {
                         use_column_generation = true;
                     }
