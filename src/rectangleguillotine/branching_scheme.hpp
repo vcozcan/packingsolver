@@ -10,6 +10,7 @@
 #include "treesearchsolver/common.hpp"
 
 #include <functional>
+#include <utility>
 
 namespace packingsolver
 {
@@ -128,6 +129,28 @@ public:
      */
     struct Node
     {
+        Node() = default;
+        Node(const Node&) = default;
+        Node(Node&&) = default;
+        Node& operator=(const Node&) = default;
+        Node& operator=(Node&&) = default;
+
+        ~Node()
+        {
+            // Each search owns its node tree on one thread; callbacks export
+            // Solutions, not Nodes. There are no weak owners promoted during
+            // cleanup, and raw traversals retain an owning descendant. Under
+            // these assumptions a unique parent can be safely detached;
+            // use_count() alone would not synchronize concurrent node access.
+            while (parent != nullptr && parent.use_count() == 1) {
+                auto ancestor = std::move(parent->parent);
+                // The parent's own destructor now has no chain to recurse on.
+                parent.reset();
+                parent = std::move(ancestor);
+            }
+            // A shared parent remains intact for the other live branches.
+        }
+
         /** Id of the node. */
         NodeId id = -1;
 
