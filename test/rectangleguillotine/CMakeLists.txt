@@ -10,6 +10,7 @@ target_sources(PackingSolver_rectangleguillotine_test PRIVATE
     branching_scheme/cut_thickness_test.cpp
     branching_scheme/integration_test.cpp
     branching_scheme/branching_scheme_test.cpp
+    branching_scheme/node_lifetime_test.cpp
     branching_scheme/per_bin_minimum_test.cpp
     column_generation_2_test.cpp
     sets_test.cpp
